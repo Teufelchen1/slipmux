@@ -125,7 +125,7 @@ const CONFIGURATION: u8 = 0xA9;
 
 #[must_use]
 pub fn encode_diagnostic(text: &str) -> ([u8; 256], usize) {
-    encode(Slipmux::Diagnostic(text.to_string()))
+    encode(Slipmux::Diagnostic(text.to_owned()))
 }
 
 #[must_use]

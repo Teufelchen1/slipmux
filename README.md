@@ -1,3 +1,4 @@
+[![Clippy & co](https://github.com/Teufelchen1/slipmux/actions/workflows/rust.yml/badge.svg)](https://github.com/Teufelchen1/slipmux/actions/workflows/rust.yml)
 # Slipmux: Using an UART interface for diagnostics, configuration, and packet transfer
 
 Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
