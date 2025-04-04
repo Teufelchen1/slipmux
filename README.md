@@ -3,7 +3,7 @@
 
 Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
 
-Note: Currently no checksumming on the configuration frames implemented!
+Note: Currently no checksumming on the configuration frames, and no frame aborting is implemented!
 
 ## What is Slipmux
 
@@ -14,3 +14,18 @@ multiplexing. Slipmux defines three frame types: traditional IP packets,
 diagnostic frames and configuration messages.
 Diagnostic frames are UTF-8 encoded strings intended as human-readable messages.
 Configuration messages are serialized `CoAP` messages.
+
+
+## Todo
+
+- [x] Remove coap-lite dep
+- [x] Don't leak types of the `serial-line-ip-rs` crate
+- [ ] Implement FCS check sum for configuration frame
+- [ ] Implement frame abort
+- [ ] Provide tests for IP packets
+- [ ] Make crate optional `#[no_std]`
+- [ ] Rethink public interfaces (generalise the usability):
+	- [ ] Currently wild mix of `[u8]` and `Vec<u8>`
+	- [ ] Impossible to know if the deocder is completely done or if bytes remain in its buffer
+	- [ ] Error handling is tedious
+- [ ] Interoperability tests with other slipmux implementations
