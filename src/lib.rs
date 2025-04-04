@@ -155,16 +155,19 @@ pub enum Error {
     BadFrameType,
 }
 
+/// Short hand for `encode(Slipmux::Diagnostic(text.to_owned()))`
 #[must_use]
 pub fn encode_diagnostic(text: &str) -> ([u8; 256], usize) {
     encode(Slipmux::Diagnostic(text.to_owned()))
 }
 
+/// Short hand for `encode(Slipmux::Configuration(packet))`
 #[must_use]
 pub fn encode_configuration(packet: Vec<u8>) -> ([u8; 256], usize) {
     encode(Slipmux::Configuration(packet))
 }
 
+/// Encodes `Slipmux` data into a frame
 #[must_use]
 pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
     let mut buffer = [0; 256];
@@ -199,6 +202,7 @@ enum DecoderState {
     Incomplete(),
 }
 
+/// Slipmux decoder context
 pub struct Decoder {
     slip: serial_line_ip::Decoder,
     index: usize,
@@ -212,6 +216,7 @@ impl Default for Decoder {
 }
 
 impl Decoder {
+    /// Create a new context for the slipmux decoder
     #[must_use]
     pub fn new() -> Self {
         let mut decoder = serial_line_ip::Decoder::new();
@@ -230,6 +235,12 @@ impl Decoder {
         self.index = 0;
     }
 
+    /// Decode an input slice into a vector of Slipmux frames
+    ///
+    /// Returns a vector of frames.
+    /// Length of the vector might be zero, for example when a frame is started but not
+    /// completed in the given input. In this case, call `decode()` again once new
+    /// input data is available.
     pub fn decode(&mut self, input: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut result_vec = Vec::new();
         let mut offset = 0;
