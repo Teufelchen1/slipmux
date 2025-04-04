@@ -108,7 +108,6 @@
 //! }
 //!
 //! ```
-#![allow(clippy::missing_panics_doc)]
 use serial_line_ip::EncodeTotals;
 use serial_line_ip::Encoder;
 use serial_line_ip::Error as SlipError;
@@ -168,6 +167,10 @@ pub fn encode_configuration(packet: Vec<u8>) -> ([u8; 256], usize) {
 }
 
 /// Encodes `Slipmux` data into a frame
+///
+/// # Panics
+///
+/// Will panic if the encoded input does not fit into 256 byte buffer.
 #[must_use]
 pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
     let mut buffer = [0; 256];
@@ -217,6 +220,10 @@ impl Default for Decoder {
 
 impl Decoder {
     /// Create a new context for the slipmux decoder
+    ///
+    /// # Panics
+    ///
+    /// Will panic if the underlying decoder context can not be created.
     #[must_use]
     pub fn new() -> Self {
         let mut decoder = serial_line_ip::Decoder::new();
