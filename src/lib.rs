@@ -200,7 +200,7 @@ enum DecoderState {
 }
 
 pub struct Decoder {
-    slip_decoder: serial_line_ip::Decoder,
+    slip: serial_line_ip::Decoder,
     index: usize,
     buffer: [u8; 10240],
 }
@@ -218,15 +218,15 @@ impl Decoder {
         let mut buffer = [0; 10240];
         decoder.decode(&[END], &mut buffer).unwrap();
         Self {
-            slip_decoder: decoder,
+            slip: decoder,
             index: 0,
             buffer,
         }
     }
 
     fn reset(&mut self) {
-        self.slip_decoder = serial_line_ip::Decoder::new();
-        self.slip_decoder.decode(&[END], &mut self.buffer).unwrap();
+        self.slip = serial_line_ip::Decoder::new();
+        self.slip.decode(&[END], &mut self.buffer).unwrap();
         self.index = 0;
     }
 
@@ -254,16 +254,14 @@ impl Decoder {
     }
 
     fn decode_partial(&mut self, input: &[u8]) -> DecoderState {
-        let partial_result = self
-            .slip_decoder
-            .decode(input, &mut self.buffer[self.index..]);
+        let partial_result = self.slip.decode(input, &mut self.buffer[self.index..]);
 
         match partial_result {
             Err(SlipError::NoOutputSpaceForHeader | SlipError::NoOutputSpaceForEndByte) => {
-                return DecoderState::DecodeError(Error::NotEnoughSpace)
+                return DecoderState::DecodeError(Error::NotEnoughSpace);
             }
             Err(SlipError::BadHeaderDecode | SlipError::BadEscapeSequenceDecode) => {
-                return DecoderState::DecodeError(Error::BadFraming)
+                return DecoderState::DecodeError(Error::BadFraming);
             }
             _ => (),
         }
