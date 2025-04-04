@@ -1,8 +1,9 @@
 [package]
 authors = ["Bennet Hattesen <bennet.hattesen@haw-hamburg.de>"]
+edition = "2024"
 description = "Slipmux de- and encoding"
 homepage = "https://github.com/teufelchen1/slipmux"
-edition = "2021"
+license = "MIT OR Apache-2.0"
 name = "slipmux"
 readme = "README.md"
 repository = "https://github.com/teufelchen1/slipmux"
