@@ -25,4 +25,6 @@ lto = true
 
 [dependencies]
 serial-line-ip = "0.5"
+
+[dev-dependencies]
 coap-lite = "0.13"
