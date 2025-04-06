@@ -1,8 +1,11 @@
 [package]
 authors = ["Bennet Hattesen <bennet.hattesen@haw-hamburg.de>"]
+categories = ["encoding"]
 edition = "2024"
 description = "Slipmux de- and encoding"
 homepage = "https://github.com/teufelchen1/slipmux"
+keywords = ["slip", "serial", "uart", "framing", "coap"]
+
 license = "MIT OR Apache-2.0"
 name = "slipmux"
 readme = "README.md"
@@ -10,10 +13,12 @@ repository = "https://github.com/teufelchen1/slipmux"
 version = "0.1.0"
 
 [lints.rust]
+missing_docs = "warn"
 unsafe_code = "forbid"
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
+cargo_common_metadata = "warn"
 let_underscore_untyped = "warn"
 str_to_string = "warn"
 

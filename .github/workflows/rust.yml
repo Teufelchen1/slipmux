@@ -2,9 +2,10 @@ name: Rust
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,14 +15,14 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
-    - name: Clippy Debug
-      run: cargo clippy -V
-    - name: Clippy
-      run: cargo clippy -- -D warnings -W clippy::pedantic
-    - name: Check formatting
-      run: cargo fmt --all --check
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - uses: actions/checkout@v3
+      - name: Clippy Debug
+        run: cargo clippy -V
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Build
+        run: cargo build --verbose
+      - name: Run tests
+        run: cargo test --verbose
