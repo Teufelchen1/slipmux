@@ -63,7 +63,7 @@
 //! assert!(frame.is_ok());
 //! match frame.unwrap() {
 //!     Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-//!     _ => assert!(false),
+//!     _ => panic!(),
 //! }
 //!
 //! ```
@@ -133,10 +133,14 @@ const IP6_FROM: u8 = 0x60;
 /// Final start byte of IPv6 packet range
 const IP6_TO: u8 = 0x6F;
 
+/// The frame types that Slipmux offers
 #[derive(Debug)]
 pub enum Slipmux {
+    /// A diagnostic frame.
     Diagnostic(String),
+    /// A configuration frame, should contain a coap packet but that is not guaranteed.
     Configuration(Vec<u8>),
+    /// An IPv4/6 packet frame.
     Packet(Vec<u8>),
 }
 
@@ -201,8 +205,8 @@ pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
 enum DecoderState {
     Fin(Result<Slipmux, Error>, usize),
     DecodeError(Error),
-    Skip(),
-    Incomplete(),
+    Skip,
+    Incomplete,
 }
 
 /// Slipmux decoder context
@@ -262,8 +266,8 @@ impl Decoder {
                         result_vec.push(Err(err));
                         break;
                     }
-                    DecoderState::Incomplete() => input.len(),
-                    DecoderState::Skip() => 1,
+                    DecoderState::Incomplete => input.len(),
+                    DecoderState::Skip => 1,
                 }
             };
             offset += used_bytes;
@@ -287,7 +291,7 @@ impl Decoder {
         let (used_bytes_from_input, out, end) = partial_result.unwrap();
         self.index += out.len();
         if end && self.index == 0 {
-            return DecoderState::Skip();
+            return DecoderState::Skip;
         }
         if end {
             let retval = {
@@ -310,7 +314,7 @@ impl Decoder {
             DecoderState::Fin(retval, used_bytes_from_input)
         } else {
             assert!(used_bytes_from_input == input.len());
-            DecoderState::Incomplete()
+            DecoderState::Incomplete
         }
     }
 }
@@ -373,7 +377,7 @@ mod tests {
         assert!(frame.is_ok());
         match frame.unwrap() {
             Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-            _ => assert!(false),
+            _ => unreachable!(),
         }
     }
 
@@ -389,7 +393,7 @@ mod tests {
         assert!(frame.is_ok());
         match frame.unwrap() {
             Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-            _ => assert!(false),
+            _ => unreachable!(),
         }
     }
 
@@ -406,7 +410,7 @@ mod tests {
         assert!(frame.is_ok());
         match frame.unwrap() {
             Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-            _ => assert!(false),
+            _ => unreachable!(),
         }
     }
 
@@ -421,10 +425,10 @@ mod tests {
         ];
         let mut slipmux = Decoder::new();
         for input_slice in SLIPMUX_ENCODED.chunks(3) {
-            for slipframe in slipmux.decode(&input_slice) {
+            for slipframe in slipmux.decode(input_slice) {
                 match slipframe {
                     Ok(Slipmux::Diagnostic(s)) => {
-                        assert_eq!(s, "Hello World!")
+                        assert_eq!(s, "Hello World!");
                     }
                     Ok(Slipmux::Configuration(_conf)) => {
                         // Do stuff
@@ -432,7 +436,7 @@ mod tests {
                     Ok(Slipmux::Packet(_packet)) => {
                         // Do stuff
                     }
-                    _ => assert!(false),
+                    _ => unreachable!(),
                 }
             }
         }
@@ -449,8 +453,8 @@ mod tests {
         let frame = results.pop().unwrap();
         assert!(frame.is_err());
         match frame {
-            Err(Error::BadFrameType) => assert!(true),
-            _ => assert!(false),
+            Err(Error::BadFrameType) => {} // expected case
+            _ => unreachable!(),
         }
     }
 
@@ -482,10 +486,10 @@ mod tests {
         ];
         let mut slipmux = Decoder::new();
         for input_slice in SLIPMUX_ENCODED.chunks(4) {
-            for slipframe in slipmux.decode(&input_slice) {
+            for slipframe in slipmux.decode(input_slice) {
                 match slipframe {
                     Ok(Slipmux::Diagnostic(s)) => {
-                        assert_eq!(s, "Hello World!")
+                        assert_eq!(s, "Hello World!");
                     }
                     Ok(Slipmux::Configuration(_conf)) => {
                         // Do stuff
@@ -493,7 +497,7 @@ mod tests {
                     Ok(Slipmux::Packet(_packet)) => {
                         // Do stuff
                     }
-                    _ => assert!(false),
+                    _ => unreachable!(),
                 }
             }
         }
