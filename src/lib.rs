@@ -2,7 +2,7 @@
 //!
 //! Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
 //!
-//! Note: Currently no checksumming on the configuration frames, and no frame aborting is implemented!
+//! Note: Frame aborting is not implemented!
 //!
 //! ## What is Slipmux
 //!
