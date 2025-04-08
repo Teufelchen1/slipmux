@@ -3,7 +3,7 @@
 
 Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
 
-Note: Currently no checksumming on the configuration frames, and no frame aborting is implemented!
+Note: Frame aborting is not implemented!
 
 ## What is Slipmux
 
@@ -20,7 +20,7 @@ Configuration messages are serialized `CoAP` messages.
 - [x] Remove coap-lite dep
 - [x] Don't leak types of the `serial-line-ip-rs` crate
 - [x] Provide tests for IP packets
-- [ ] Implement FCS check sum for configuration frame
+- [x] Implement FCS check sum for configuration frame
 - [ ] Implement frame abort
 - [ ] Make crate optional `#[no_std]`
 - [ ] Rethink public interfaces (generalise the usability):

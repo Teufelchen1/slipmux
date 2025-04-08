@@ -2,7 +2,7 @@
 //!
 //! Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
 //!
-//! Note: Currently no checksumming on the configuration frames, and no frame aborting is implemented!
+//! Note: Frame aborting is not implemented!
 //!
 //! ## What is Slipmux
 //!
@@ -36,7 +36,7 @@
 //!
 //! let input = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
 //! let (result, length) = encode(input);
-//! assert_eq!(result[..length], [0xc0, 0xa9, 0x40, 0x01, 0x00, 0x00, 0xc0]);
+//! assert_eq!(result[..length], [0xc0, 0xa9, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, 0xc0]);
 //! ```
 //!
 //! ### Decoding
@@ -108,9 +108,12 @@
 //! }
 //!
 //! ```
+use checksum::{check_fcs, fcs16};
 use serial_line_ip::EncodeTotals;
 use serial_line_ip::Encoder;
 use serial_line_ip::Error as SlipError;
+
+mod checksum;
 
 /// Ends a frame
 const END: u8 = 0xC0;
@@ -196,9 +199,11 @@ pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
                 .encode(s.as_bytes(), &mut buffer[totals.written..])
                 .unwrap();
         }
-        Slipmux::Configuration(conf) => {
-            totals += slip.encode(&[CONFIGURATION], &mut buffer).unwrap();
-            totals += slip.encode(&conf, &mut buffer[totals.written..]).unwrap();
+        Slipmux::Configuration(mut conf) => {
+            conf.insert(0, CONFIGURATION);
+            let fcs = fcs16(&conf);
+            conf.extend_from_slice(&fcs.to_le_bytes());
+            totals += slip.encode(&conf, &mut buffer).unwrap();
         }
         Slipmux::Packet(packet) => {
             totals += slip.encode(&packet, &mut buffer[totals.written..]).unwrap();
@@ -307,7 +312,14 @@ impl Decoder {
                         Ok(Slipmux::Diagnostic(s))
                     }
                     CONFIGURATION => {
-                        Ok(Slipmux::Configuration(self.buffer[1..self.index].to_vec()))
+                        // Check the checksum, which is two bytes long and we don't pass it further
+                        if check_fcs(&self.buffer[0..self.index]) {
+                            Ok(Slipmux::Configuration(
+                                self.buffer[1..self.index - 2].to_vec(),
+                            ))
+                        } else {
+                            Err(Error::BadFraming)
+                        }
                     }
                     IP4_FROM..IP4_TO | IP6_FROM..IP6_TO => {
                         Ok(Slipmux::Packet(self.buffer[0..self.index].to_vec()))
@@ -342,17 +354,17 @@ mod tests {
     }
 
     #[test]
-    fn encode_empty_diagnostic() {
+    fn encode_wrapper_diagnostic() {
         let (result, length) = encode_diagnostic("");
         assert_eq!(result[..length], *b"\xc0\x0a\xc0");
     }
 
     #[test]
-    fn encode_simple_configuration() {
+    fn encode_wrapper_configuration() {
         let (result, length) = encode_configuration(Packet::new().to_bytes().unwrap());
         assert_eq!(
             result[..length],
-            [END, CONFIGURATION, 0x40, 0x01, 0x00, 0x00, END]
+            [END, CONFIGURATION, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, END]
         );
     }
 
@@ -366,12 +378,12 @@ mod tests {
         let (result, length) = encode(input);
         assert_eq!(
             result[..length],
-            [END, CONFIGURATION, 0x40, 0x01, 0x00, 0x00, END]
+            [END, CONFIGURATION, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, END]
         );
     }
 
     #[test]
-    fn decode_simple() {
+    fn decode_diagnostic() {
         const SLIPMUX_ENCODED: [u8; 15] = [
             END, DIAGNOSTIC, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64,
             0x21, END,
@@ -380,7 +392,6 @@ mod tests {
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
-        assert!(frame.is_ok());
         match frame.unwrap() {
             Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
             _ => unreachable!(),
@@ -388,7 +399,38 @@ mod tests {
     }
 
     #[test]
-    fn decode_simple_no_leading_deliminator() {
+    fn decode_configuration() {
+        const SLIPMUX_ENCODED: [u8; 17] = [
+            END,
+            CONFIGURATION,
+            0x48,
+            0x65,
+            0x6c,
+            0x6c,
+            0x6f,
+            0x20,
+            0x57,
+            0x6f,
+            0x72,
+            0x6c,
+            0x64,
+            0x21,
+            0x49,
+            0xff,
+            END,
+        ];
+        let mut slipmux = Decoder::new();
+        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
+        assert_eq!(results.len(), 1);
+        let frame = results.pop().unwrap();
+        match frame.unwrap() {
+            Slipmux::Configuration(s) => assert_eq!(s, b"Hello World!"),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn decode_no_leading_deliminator() {
         const SLIPMUX_ENCODED: [u8; 14] = [
             DIAGNOSTIC, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, END,
         ];
@@ -396,7 +438,6 @@ mod tests {
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
-        assert!(frame.is_ok());
         match frame.unwrap() {
             Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
             _ => unreachable!(),
@@ -413,7 +454,6 @@ mod tests {
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
-        assert!(frame.is_ok());
         match frame.unwrap() {
             Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
             _ => unreachable!(),
@@ -505,6 +545,40 @@ mod tests {
                     }
                     _ => unreachable!(),
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn encode_decode_all_frametypes() {
+        let mut stream = vec![];
+        let input_diagnostic = Slipmux::Diagnostic("Hello World!".to_owned());
+        let (result, length) = encode(input_diagnostic);
+        stream.extend_from_slice(&result[..length]);
+
+        let input_configuration = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
+        let (result, length) = encode(input_configuration);
+        stream.extend_from_slice(&result[..length]);
+
+        let input_packet = Slipmux::Packet(vec![0x60, 0x0d, 0xda, 0x01, 0xfe, 0x80]);
+        let (result, length) = encode(input_packet);
+        stream.extend_from_slice(&result[..length]);
+
+        let mut slipmux = Decoder::new();
+        let frames = slipmux.decode(&stream);
+        assert_eq!(3, frames.len());
+        for slipframe in frames {
+            match slipframe {
+                Ok(Slipmux::Diagnostic(s)) => {
+                    assert_eq!(s, "Hello World!");
+                }
+                Ok(Slipmux::Configuration(conf)) => {
+                    assert_eq!(conf, Packet::new().to_bytes().unwrap());
+                }
+                Ok(Slipmux::Packet(packet)) => {
+                    assert_eq!(packet, vec![0x60, 0x0d, 0xda, 0x01, 0xfe, 0x80]);
+                }
+                Err(_) => unreachable!(),
             }
         }
     }
