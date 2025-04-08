@@ -19,9 +19,9 @@ Configuration messages are serialized `CoAP` messages.
 
 - [x] Remove coap-lite dep
 - [x] Don't leak types of the `serial-line-ip-rs` crate
+- [x] Provide tests for IP packets
 - [ ] Implement FCS check sum for configuration frame
 - [ ] Implement frame abort
-- [ ] Provide tests for IP packets
 - [ ] Make crate optional `#[no_std]`
 - [ ] Rethink public interfaces (generalise the usability):
 	- [ ] Currently wild mix of `[u8]` and `Vec<u8>`
