@@ -78,6 +78,7 @@ mod tests {
     fn fcs() {
         use crate::checksum::{check_fcs, fcs16};
         let fcs = fcs16(&[0x00, 0x01, 0x02, 0x03]);
+        assert_eq!(fcs, 0xa729);
         assert!(check_fcs(&[
             0x00,
             0x01,
@@ -87,5 +88,10 @@ mod tests {
             fcs.to_le_bytes()[1],
         ]));
         assert!(check_fcs(&[0x00, 0x01, 0x02, 0x03, 0x29, 0xa7]));
+        let fcs = fcs16(&[0xa9, 0x62, 0x84, 0x86, 0xae, 0x2, 0x0]);
+        assert_eq!(fcs, 0x4afd);
+        assert!(check_fcs(&[
+            0xa9, 0x62, 0x84, 0x86, 0xae, 0x2, 0x0, 0xfd, 0x4a
+        ]));
     }
 }
