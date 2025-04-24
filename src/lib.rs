@@ -158,7 +158,9 @@ pub enum Error {
     /// The decoder encountered an invalid frame, e.g. a bad escape sequence.
     BadFraming,
     /// The decoder encountered an unkown frame type.
-    BadFrameType,
+    BadFrameType(u8),
+    /// The frame checksum was invalid.
+    BadFCS(Vec<u8>),
 }
 
 /// Short hand for `encode(Slipmux::Diagnostic(text.to_owned()))`
@@ -318,13 +320,13 @@ impl Decoder {
                                 self.buffer[1..self.index - 2].to_vec(),
                             ))
                         } else {
-                            Err(Error::BadFraming)
+                            Err(Error::BadFCS(self.buffer[0..self.index].to_vec()))
                         }
                     }
                     IP4_FROM..IP4_TO | IP6_FROM..IP6_TO => {
                         Ok(Slipmux::Packet(self.buffer[0..self.index].to_vec()))
                     }
-                    _ => Err(Error::BadFrameType),
+                    _ => Err(Error::BadFrameType(self.buffer[0])),
                 }
             };
 
@@ -430,6 +432,34 @@ mod tests {
     }
 
     #[test]
+    fn decode_configuration_wrong_fcs() {
+        const SLIPMUX_ENCODED: [u8; 17] = [
+            END,
+            CONFIGURATION,
+            0x48,
+            0x65,
+            0x6c,
+            0x6c,
+            0x6f,
+            0x21,
+            0x57,
+            0x6f,
+            0x72,
+            0x6c,
+            0x64,
+            0x21,
+            0x49,
+            0xff,
+            END,
+        ];
+        let mut slipmux = Decoder::new();
+        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
+        assert_eq!(results.len(), 1);
+        let frame = results.pop().unwrap();
+        assert!(matches!(frame, Err(Error::BadFCS(_))));
+    }
+
+    #[test]
     fn decode_no_leading_deliminator() {
         const SLIPMUX_ENCODED: [u8; 14] = [
             DIAGNOSTIC, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21, END,
@@ -499,7 +529,7 @@ mod tests {
         let frame = results.pop().unwrap();
         assert!(frame.is_err());
         match frame {
-            Err(Error::BadFrameType) => {} // expected case
+            Err(Error::BadFrameType(0x50)) => {} // expected case
             _ => unreachable!(),
         }
     }
@@ -517,7 +547,7 @@ mod tests {
         let frames = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(frames.len(), 3);
         assert!(matches!(frames[0], Ok(Slipmux::Diagnostic(_))));
-        assert!(matches!(frames[1], Err(Error::BadFrameType)));
+        assert!(matches!(frames[1], Err(Error::BadFrameType(0x50))));
         assert!(matches!(frames[2], Ok(Slipmux::Diagnostic(_))));
     }
 
