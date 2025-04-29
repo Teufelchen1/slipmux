@@ -23,20 +23,21 @@
 //! Encoding is done in a single pass.
 //! First wrap your data in the matching type of the `Slipmux` enum. Then
 //! feed it into the `encode()` function.
-//! Alternatively, use the helper function `encode_diagnostic()` and `encode_configurtation()`.
+//! Alternatively, use the helper functions `encode_diagnostic()`, `encode_configurtation()` and `encode_packet()`.
 //!
 //! ```
 //! use slipmux::Slipmux;
 //! use slipmux::encode;
 //! use coap_lite::Packet;
 //!
+//! let mut buffer: [u8; 2048] = [0; 2048];
 //! let input = Slipmux::Diagnostic("Hello World!".to_owned());
-//! let (result, length) = encode(input);
-//! assert_eq!(result[..length], *b"\xc0\x0aHello World!\xc0");
+//! let length = encode(input, &mut buffer);
+//! assert_eq!(buffer[..length], *b"\xc0\x0aHello World!\xc0");
 //!
 //! let input = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
-//! let (result, length) = encode(input);
-//! assert_eq!(result[..length], [0xc0, 0xa9, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, 0xc0]);
+//! let length = encode(input, &mut buffer);
+//! assert_eq!(buffer[..length], [0xc0, 0xa9, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, 0xc0]);
 //! ```
 //!
 //! ### Decoding
@@ -165,30 +166,29 @@ pub enum Error {
 
 /// Short hand for `encode(Slipmux::Diagnostic(text.to_owned()))`
 #[must_use]
-pub fn encode_diagnostic(text: &str) -> ([u8; 256], usize) {
-    encode(Slipmux::Diagnostic(text.to_owned()))
+pub fn encode_diagnostic(text: &str, buffer: &mut [u8]) -> usize {
+    encode(Slipmux::Diagnostic(text.to_owned()), buffer)
 }
 
 /// Short hand for `encode(Slipmux::Configuration(packet))`
 #[must_use]
-pub fn encode_configuration(packet: Vec<u8>) -> ([u8; 256], usize) {
-    encode(Slipmux::Configuration(packet))
+pub fn encode_configuration(packet: Vec<u8>, buffer: &mut [u8]) -> usize {
+    encode(Slipmux::Configuration(packet), buffer)
 }
 
 /// Short hand for `encode(Slipmux::Packet(packet))`
 #[must_use]
-pub fn encode_packet(packet: Vec<u8>) -> ([u8; 256], usize) {
-    encode(Slipmux::Packet(packet))
+pub fn encode_packet(packet: Vec<u8>, buffer: &mut [u8]) -> usize {
+    encode(Slipmux::Packet(packet), buffer)
 }
 
 /// Encodes `Slipmux` data into a frame
 ///
 /// # Panics
 ///
-/// Will panic if the encoded input does not fit into 256 byte buffer.
+/// Will panic if the encoded input does not fit into the buffer
 #[must_use]
-pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
-    let mut buffer = [0; 256];
+pub fn encode(input: Slipmux, buffer: &mut [u8]) -> usize {
     let mut slip = Encoder::new();
     let mut totals = EncodeTotals {
         read: 0,
@@ -196,7 +196,7 @@ pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
     };
     match input {
         Slipmux::Diagnostic(s) => {
-            totals += slip.encode(&[DIAGNOSTIC], &mut buffer).unwrap();
+            totals += slip.encode(&[DIAGNOSTIC], buffer).unwrap();
             totals += slip
                 .encode(s.as_bytes(), &mut buffer[totals.written..])
                 .unwrap();
@@ -205,14 +205,14 @@ pub fn encode(input: Slipmux) -> ([u8; 256], usize) {
             conf.insert(0, CONFIGURATION);
             let fcs = fcs16(&conf);
             conf.extend_from_slice(&fcs.to_le_bytes());
-            totals += slip.encode(&conf, &mut buffer).unwrap();
+            totals += slip.encode(&conf, buffer).unwrap();
         }
         Slipmux::Packet(packet) => {
             totals += slip.encode(&packet, &mut buffer[totals.written..]).unwrap();
         }
     }
     totals += slip.finish(&mut buffer[totals.written..]).unwrap();
-    (buffer, totals.written)
+    totals.written
 }
 
 enum DecoderState {
@@ -346,40 +346,44 @@ mod tests {
 
     #[test]
     fn encode_simple_diagnostic() {
-        let (result, length) = encode_diagnostic("Hello World!");
-        assert_eq!(result[..length], *b"\xc0\x0aHello World!\xc0");
-        let (result, length) = encode_diagnostic("Yes, I would like one \x0a please.");
+        let mut buffer: [u8; 2048] = [0; 2048];
+        let length = encode_diagnostic("Hello World!", &mut buffer);
+        assert_eq!(buffer[..length], *b"\xc0\x0aHello World!\xc0");
+        let length = encode_diagnostic("Yes, I would like one \x0a please.", &mut buffer);
         assert_eq!(
-            result[..length],
+            buffer[..length],
             *b"\xc0\x0aYes, I would like one \x0a please.\xc0"
         );
     }
 
     #[test]
     fn encode_wrapper_diagnostic() {
-        let (result, length) = encode_diagnostic("");
-        assert_eq!(result[..length], *b"\xc0\x0a\xc0");
+        let mut buffer: [u8; 2048] = [0; 2048];
+        let length = encode_diagnostic("", &mut buffer);
+        assert_eq!(buffer[..length], *b"\xc0\x0a\xc0");
     }
 
     #[test]
     fn encode_wrapper_configuration() {
-        let (result, length) = encode_configuration(Packet::new().to_bytes().unwrap());
+        let mut buffer: [u8; 2048] = [0; 2048];
+        let length = encode_configuration(Packet::new().to_bytes().unwrap(), &mut buffer);
         assert_eq!(
-            result[..length],
+            buffer[..length],
             [END, CONFIGURATION, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, END]
         );
     }
 
     #[test]
     fn encode_direct() {
+        let mut buffer: [u8; 2048] = [0; 2048];
         let input = Slipmux::Diagnostic("Hello World!".to_owned());
-        let (result, length) = encode(input);
-        assert_eq!(result[..length], *b"\xc0\x0aHello World!\xc0");
+        let length = encode(input, &mut buffer);
+        assert_eq!(buffer[..length], *b"\xc0\x0aHello World!\xc0");
 
         let input = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
-        let (result, length) = encode(input);
+        let length = encode(input, &mut buffer);
         assert_eq!(
-            result[..length],
+            buffer[..length],
             [END, CONFIGURATION, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, END]
         );
     }
@@ -581,21 +585,19 @@ mod tests {
 
     #[test]
     fn encode_decode_all_frametypes() {
-        let mut stream = vec![];
+        let mut buffer: [u8; 2048] = [0; 2048];
+
         let input_diagnostic = Slipmux::Diagnostic("Hello World!".to_owned());
-        let (result, length) = encode(input_diagnostic);
-        stream.extend_from_slice(&result[..length]);
+        let mut length = encode(input_diagnostic, &mut buffer);
 
         let input_configuration = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
-        let (result, length) = encode(input_configuration);
-        stream.extend_from_slice(&result[..length]);
+        length += encode(input_configuration, &mut buffer[length..]);
 
         let input_packet = Slipmux::Packet(vec![0x60, 0x0d, 0xda, 0x01, 0xfe, 0x80]);
-        let (result, length) = encode(input_packet);
-        stream.extend_from_slice(&result[..length]);
+        length += encode(input_packet, &mut buffer[length..]);
 
         let mut slipmux = Decoder::new();
-        let frames = slipmux.decode(&stream);
+        let frames = slipmux.decode(&buffer[..length]);
         assert_eq!(3, frames.len());
         for slipframe in frames {
             match slipframe {
@@ -662,42 +664,44 @@ mod tests {
             0x00, 0x05, 0x69, 0x44, 0x52, 0x41, 0x43,
         ];
 
-        let (result, length) = encode_packet(IP4_FOO.to_vec());
+        let mut buffer: [u8; 2048] = [0; 2048];
+
+        let length = encode_packet(IP4_FOO.to_vec(), &mut buffer);
         assert_eq!(length, 126);
         let mut slipmux = Decoder::new();
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&result[..length]).pop().unwrap();
+        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip4_foo) => assert_eq!(decoded_ip4_foo, IP4_FOO),
             _ => unreachable!(),
         }
 
-        let (result, length) = encode_packet(IP4_BAR.to_vec());
+        let length = encode_packet(IP4_BAR.to_vec(), &mut buffer);
         assert_eq!(length, 92);
         let mut slipmux = Decoder::new();
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&result[..length]).pop().unwrap();
+        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip4_bar) => assert_eq!(decoded_ip4_bar, IP4_BAR),
             _ => unreachable!(),
         }
 
-        let (result, length) = encode_packet(IP6_FOO.to_vec());
+        let length = encode_packet(IP6_FOO.to_vec(), &mut buffer);
         // On byte extra to escape a 0xc0 / END
         assert_eq!(length, 150);
         let mut slipmux = Decoder::new();
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&result[..length]).pop().unwrap();
+        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip6_foo) => assert_eq!(decoded_ip6_foo, IP6_FOO),
             _ => unreachable!(),
         }
 
-        let (result, length) = encode_packet(IP6_BAR.to_vec());
+        let length = encode_packet(IP6_BAR.to_vec(), &mut buffer);
         assert_eq!(length, 107);
         let mut slipmux = Decoder::new();
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&result[..length]).pop().unwrap();
+        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip6_bar) => assert_eq!(decoded_ip6_bar, IP6_BAR),
             _ => unreachable!(),
