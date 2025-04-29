@@ -13,19 +13,19 @@ enum DecoderState {
 }
 
 /// Slipmux decoder context
-pub struct Decoder {
+pub struct BufferedDecoder {
     slip: serial_line_ip::Decoder,
     index: usize,
     buffer: [u8; 10240],
 }
 
-impl Default for Decoder {
+impl Default for BufferedDecoder {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Decoder {
+impl BufferedDecoder {
     /// Create a new context for the slipmux decoder
     ///
     /// # Panics
@@ -155,7 +155,7 @@ mod tests {
             0x21,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
@@ -186,7 +186,7 @@ mod tests {
             0xff,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
@@ -217,7 +217,7 @@ mod tests {
             0xff,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
@@ -242,7 +242,7 @@ mod tests {
             0x21,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
@@ -275,7 +275,7 @@ mod tests {
             Constants::END,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
@@ -333,7 +333,7 @@ mod tests {
             0x21,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         for input_slice in SLIPMUX_ENCODED.chunks(3) {
             for slipframe in slipmux.decode(input_slice) {
                 match slipframe {
@@ -371,7 +371,7 @@ mod tests {
             0x21,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let mut results = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(results.len(), 1);
         let frame = results.pop().unwrap();
@@ -432,7 +432,7 @@ mod tests {
             0x21,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         let frames = slipmux.decode(&SLIPMUX_ENCODED);
         assert_eq!(frames.len(), 3);
         assert!(matches!(frames[0], Ok(Slipmux::Diagnostic(_))));
@@ -490,7 +490,7 @@ mod tests {
             0x21,
             Constants::END,
         ];
-        let mut slipmux = Decoder::new();
+        let mut slipmux = BufferedDecoder::new();
         for input_slice in SLIPMUX_ENCODED.chunks(4) {
             for slipframe in slipmux.decode(input_slice) {
                 match slipframe {
