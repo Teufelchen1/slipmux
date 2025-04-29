@@ -1,22 +1,63 @@
 use crate::Constants;
-use crate::SlipError;
-use crate::Slipmux;
-use crate::check_fcs;
+use crate::checksum::{GOOD_FCS16, INIT_FCS16, fcs16_byte};
 
 use crate::Error;
 
-enum DecoderState {
-    Fin(Result<Slipmux, Error>, usize),
-    DecodeError(Error),
-    Skip,
+enum SlipmuxState {
+    Idle,
+    UnkownFrameType,
+    Diagnostic,
+    DiagnosticEscape,
+    Configuration,
+    ConfigurationEscape,
+    Ip,
+    IpEscape,
+}
+
+use SlipmuxState::{
+    Configuration, ConfigurationEscape, Diagnostic, DiagnosticEscape, Idle, Ip, IpEscape,
+    UnkownFrameType,
+};
+
+pub enum FrameType {
+    Diagnostic,
+    Configuration,
+    Ip,
+}
+
+/// Callback handler for the decoder
+///
+/// This is typically driven by [`Decoder::decode()`], which calls it strictly in the sequence of
+/// [`.begin_frame()`][Self::begin_frame()], any number of [`.write_byte()`][Self::write_byte()]
+/// and then [`.end_frame()`][Self::end_frame()], starting over after that.
+pub trait FrameHandler {
+    /// Called when the decoder identifies a frame and starts filling it
+    fn begin_frame(&mut self, frame_type: FrameType);
+
+    /// Called with each new byte that belongs to the current frame
+    fn write_byte(&mut self, byte: u8);
+
+    /// Called when a full frame has been received
+    fn end_frame(&mut self, error: Option<Error>);
+}
+
+/// The resulting state of the last decoding step
+#[derive(Debug)]
+pub enum DecodeStatus {
+    /// Indicates that more data is needed to complete a frame
     Incomplete,
+    /// A diagnostic frame got completed
+    FrameCompleteDiagnostic,
+    /// A configuration frame got completed
+    FrameCompleteConfiguration,
+    /// A IP frame got completed
+    FrameCompleteIp,
 }
 
 /// Slipmux decoder context
 pub struct Decoder {
-    slip: serial_line_ip::Decoder,
-    index: usize,
-    buffer: [u8; 10240],
+    state: SlipmuxState,
+    fcs: u16,
 }
 
 impl Default for Decoder {
@@ -27,485 +68,138 @@ impl Default for Decoder {
 
 impl Decoder {
     /// Create a new context for the slipmux decoder
-    ///
-    /// # Panics
-    ///
-    /// Will panic if the underlying decoder context can not be created.
     #[must_use]
-    pub fn new() -> Self {
-        let mut decoder = serial_line_ip::Decoder::new();
-        let mut buffer = [0; 10240];
-        decoder.decode(&[Constants::END], &mut buffer).unwrap();
+    pub const fn new() -> Self {
         Self {
-            slip: decoder,
-            index: 0,
-            buffer,
+            state: Idle,
+            fcs: 0,
         }
     }
 
-    /// Decode an input slice into a vector of Slipmux frames
+    /// Decodes one incoming byte.
     ///
-    /// Returns a vector of frames.
-    /// Length of the vector might be zero, for example when a frame is started but not
-    /// completed in the given input. In this case, call `decode()` again once new
-    /// input data is available.
-    pub fn decode(&mut self, input: &[u8]) -> Vec<Result<Slipmux, Error>> {
-        let mut result_vec = Vec::new();
-        let mut offset = 0;
-        while offset < input.len() {
-            let used_bytes = {
-                match self.decode_partial(&input[offset..]) {
-                    DecoderState::Fin(data, bytes_consumed) => {
-                        result_vec.push(data);
-                        bytes_consumed
-                    }
-                    DecoderState::DecodeError(err) => {
-                        result_vec.push(Err(err));
-                        break;
-                    }
-                    DecoderState::Incomplete => input.len(),
-                    DecoderState::Skip => 1,
+    /// Depending on the internal decoding state, the handler may or may not get invoked.
+    ///
+    /// # Errors
+    ///
+    /// Will return `Err` if either:
+    ///     - an unkown frame type is encountered
+    ///     - the checksum of a configuration frame is bad
+    #[allow(clippy::match_same_arms)]
+    #[allow(clippy::too_many_lines)]
+    pub fn decode<H: FrameHandler>(
+        &mut self,
+        byte: u8,
+        handler: &mut H,
+    ) -> Result<DecodeStatus, Error> {
+        self.state = {
+            match (&self.state, byte) {
+                (Idle, Constants::END) => Idle, /* ignore empty frame */
+                (Idle, Constants::DIAGNOSTIC) => {
+                    handler.begin_frame(FrameType::Diagnostic);
+                    Diagnostic
                 }
-            };
-            offset += used_bytes;
-        }
-        result_vec
-    }
-
-    fn reset(&mut self) {
-        self.slip = serial_line_ip::Decoder::new();
-        self.slip
-            .decode(&[Constants::END], &mut self.buffer)
-            .unwrap();
-        self.index = 0;
-    }
-
-    fn decode_partial(&mut self, input: &[u8]) -> DecoderState {
-        let partial_result = self.slip.decode(input, &mut self.buffer[self.index..]);
-
-        match partial_result {
-            Err(SlipError::NoOutputSpaceForHeader | SlipError::NoOutputSpaceForEndByte) => {
-                return DecoderState::DecodeError(Error::NotEnoughSpace);
-            }
-            Err(SlipError::BadHeaderDecode | SlipError::BadEscapeSequenceDecode) => {
-                return DecoderState::DecodeError(Error::BadFraming);
-            }
-            _ => (),
-        }
-
-        let (used_bytes_from_input, out, end) = partial_result.unwrap();
-        self.index += out.len();
-        if end && self.index == 0 {
-            return DecoderState::Skip;
-        }
-        if end {
-            let retval = {
-                match self.buffer[0] {
-                    Constants::DIAGNOSTIC => {
-                        let s = String::from_utf8_lossy(&self.buffer[1..self.index]).to_string();
-                        Ok(Slipmux::Diagnostic(s))
-                    }
-                    Constants::CONFIGURATION => {
-                        // Check the checksum, which is two bytes long and we don't pass it further
-                        if check_fcs(&self.buffer[0..self.index]) {
-                            Ok(Slipmux::Configuration(
-                                self.buffer[1..self.index - 2].to_vec(),
-                            ))
-                        } else {
-                            Err(Error::BadFCS(self.buffer[0..self.index].to_vec()))
-                        }
-                    }
-                    Constants::IP4_FROM..Constants::IP4_TO
-                    | Constants::IP6_FROM..Constants::IP6_TO => {
-                        Ok(Slipmux::Packet(self.buffer[0..self.index].to_vec()))
-                    }
-                    _ => Err(Error::BadFrameType(self.buffer[0])),
+                (Idle, Constants::CONFIGURATION) => {
+                    handler.begin_frame(FrameType::Configuration);
+                    self.fcs = fcs16_byte(INIT_FCS16, Constants::CONFIGURATION);
+                    Configuration
                 }
-            };
+                (
+                    Idle,
+                    Constants::IP4_FROM..Constants::IP4_TO | Constants::IP6_FROM..Constants::IP6_TO,
+                ) => {
+                    handler.begin_frame(FrameType::Ip);
+                    handler.write_byte(byte);
+                    Ip
+                }
+                (Idle, _) => {
+                    self.state = UnkownFrameType;
+                    handler.end_frame(Some(Error::BadFrameType(byte)));
+                    return Err(Error::BadFrameType(byte));
+                }
+                (UnkownFrameType, Constants::END) => Idle,
+                (UnkownFrameType, _) => UnkownFrameType,
 
-            self.reset();
-            DecoderState::Fin(retval, used_bytes_from_input)
-        } else {
-            assert!(used_bytes_from_input == input.len());
-            DecoderState::Incomplete
-        }
-    }
-}
+                (Diagnostic, Constants::ESC) => DiagnosticEscape,
+                (Diagnostic, Constants::END) => {
+                    handler.end_frame(None);
+                    self.state = Idle;
+                    return Ok(DecodeStatus::FrameCompleteDiagnostic);
+                }
+                (Diagnostic, _) => {
+                    handler.write_byte(byte);
+                    Diagnostic
+                }
+                (DiagnosticEscape, Constants::ESC_END) => {
+                    handler.write_byte(Constants::END);
+                    Diagnostic
+                }
+                (DiagnosticEscape, Constants::ESC_ESC) => {
+                    handler.write_byte(Constants::ESC);
+                    Diagnostic
+                }
+                (DiagnosticEscape, _) => {
+                    handler.write_byte(byte);
+                    Diagnostic
+                }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn diagnostic() {
-        const SLIPMUX_ENCODED: [u8; 15] = [
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(results.len(), 1);
-        let frame = results.pop().unwrap();
-        match frame.unwrap() {
-            Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn configuration() {
-        const SLIPMUX_ENCODED: [u8; 17] = [
-            Constants::END,
-            Constants::CONFIGURATION,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            0x49,
-            0xff,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(results.len(), 1);
-        let frame = results.pop().unwrap();
-        match frame.unwrap() {
-            Slipmux::Configuration(s) => assert_eq!(s, b"Hello World!"),
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn configuration_wrong_fcs() {
-        const SLIPMUX_ENCODED: [u8; 17] = [
-            Constants::END,
-            Constants::CONFIGURATION,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x21,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            0x49,
-            0xff,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(results.len(), 1);
-        let frame = results.pop().unwrap();
-        assert!(matches!(frame, Err(Error::BadFCS(_))));
-    }
-
-    #[test]
-    fn no_leading_deliminator() {
-        const SLIPMUX_ENCODED: [u8; 14] = [
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(results.len(), 1);
-        let frame = results.pop().unwrap();
-        match frame.unwrap() {
-            Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn ignore_empty_frames() {
-        const SLIPMUX_ENCODED: [u8; 19] = [
-            Constants::END,
-            Constants::END,
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::END,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(results.len(), 1);
-        let frame = results.pop().unwrap();
-        match frame.unwrap() {
-            Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn only_one_end_byte_frames() {
-        // Contains three hello world!s
-        const SLIPMUX_ENCODED: [u8; 43] = [
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        for input_slice in SLIPMUX_ENCODED.chunks(3) {
-            for slipframe in slipmux.decode(input_slice) {
-                match slipframe {
-                    Ok(Slipmux::Diagnostic(s)) => {
-                        assert_eq!(s, "Hello World!");
+                (Configuration, Constants::ESC) => ConfigurationEscape,
+                (Configuration, Constants::END) => {
+                    self.state = Idle;
+                    if self.fcs == GOOD_FCS16 {
+                        handler.end_frame(None);
+                        return Ok(DecodeStatus::FrameCompleteConfiguration);
                     }
-                    Ok(Slipmux::Configuration(_conf)) => {
-                        // Do stuff
-                    }
-                    Ok(Slipmux::Packet(_packet)) => {
-                        // Do stuff
-                    }
-                    _ => unreachable!(),
+                    handler.end_frame(Some(Error::BadFCS(vec![])));
+                    return Err(Error::BadFCS(vec![]));
+                }
+                (Configuration, _) => {
+                    handler.write_byte(byte);
+                    self.fcs = fcs16_byte(self.fcs, byte);
+                    Configuration
+                }
+                (ConfigurationEscape, Constants::ESC_END) => {
+                    handler.write_byte(Constants::END);
+                    self.fcs = fcs16_byte(self.fcs, Constants::END);
+                    Configuration
+                }
+                (ConfigurationEscape, Constants::ESC_ESC) => {
+                    handler.write_byte(Constants::ESC);
+                    self.fcs = fcs16_byte(self.fcs, Constants::ESC);
+                    Configuration
+                }
+                (ConfigurationEscape, _) => {
+                    handler.write_byte(byte);
+                    self.fcs = fcs16_byte(self.fcs, byte);
+                    Configuration
+                }
+
+                (Ip, Constants::ESC) => IpEscape,
+                (Ip, Constants::END) => {
+                    self.state = Idle;
+                    handler.end_frame(None);
+                    return Ok(DecodeStatus::FrameCompleteConfiguration);
+                }
+                (Ip, _) => {
+                    handler.write_byte(byte);
+                    Ip
+                }
+                (IpEscape, Constants::ESC_END) => {
+                    handler.write_byte(Constants::END);
+                    Ip
+                }
+                (IpEscape, Constants::ESC_ESC) => {
+                    handler.write_byte(Constants::ESC);
+                    Ip
+                }
+                (IpEscape, _) => {
+                    handler.write_byte(byte);
+                    Ip
                 }
             }
-        }
-    }
+        };
 
-    #[test]
-    fn unkown_frametype() {
-        const SLIPMUX_ENCODED: [u8; 15] = [
-            Constants::END,
-            0x50,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let mut results = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(results.len(), 1);
-        let frame = results.pop().unwrap();
-        assert!(frame.is_err());
-        match frame {
-            Err(Error::BadFrameType(0x50)) => {} // expected case
-            _ => unreachable!(),
-        }
-    }
-
-    #[test]
-    fn stream_with_unkown_frametype_inbetween() {
-        // Contains three hello world!s
-        const SLIPMUX_ENCODED: [u8; 45] = [
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::END,
-            0x50,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        let frames = slipmux.decode(&SLIPMUX_ENCODED);
-        assert_eq!(frames.len(), 3);
-        assert!(matches!(frames[0], Ok(Slipmux::Diagnostic(_))));
-        assert!(matches!(frames[1], Err(Error::BadFrameType(0x50))));
-        assert!(matches!(frames[2], Ok(Slipmux::Diagnostic(_))));
-    }
-
-    #[test]
-    fn stream() {
-        // Contains three hello world!s
-        const SLIPMUX_ENCODED: [u8; 45] = [
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let mut slipmux = Decoder::new();
-        for input_slice in SLIPMUX_ENCODED.chunks(4) {
-            for slipframe in slipmux.decode(input_slice) {
-                match slipframe {
-                    Ok(Slipmux::Diagnostic(s)) => {
-                        assert_eq!(s, "Hello World!");
-                    }
-                    Ok(Slipmux::Configuration(_conf)) => {
-                        // Do stuff
-                    }
-                    Ok(Slipmux::Packet(_packet)) => {
-                        // Do stuff
-                    }
-                    _ => unreachable!(),
-                }
-            }
-        }
+        // return Incomplete when the frame wasn't completed and more data is needed
+        Ok(DecodeStatus::Incomplete)
     }
 }
