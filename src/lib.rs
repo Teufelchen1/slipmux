@@ -116,6 +116,7 @@ mod checksum;
 mod decoder;
 mod decoder_no_std;
 mod encode;
+mod framehandler;
 
 pub use encode::encode;
 pub use encode::encode_configuration;
@@ -123,6 +124,13 @@ pub use encode::encode_diagnostic;
 pub use encode::encode_packet;
 
 pub use decoder::BufferedDecoder;
+
+pub use decoder_no_std::DecodeStatus;
+pub use decoder_no_std::Decoder;
+pub use decoder_no_std::FrameHandler;
+
+pub use framehandler::BufferedFrameHandler;
+pub use framehandler::SimpleFrameHandler;
 
 /// Magic byte constants used in Slipmux
 #[non_exhaustive]
