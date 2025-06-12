@@ -130,7 +130,7 @@ pub use decoder_no_std::Decoder;
 pub use decoder_no_std::FrameHandler;
 
 pub use framehandler::BufferedFrameHandler;
-pub use framehandler::OwnedLastFrame;
+pub use framehandler::OwnedLatestFrame;
 
 /// Magic byte constants used in Slipmux
 #[non_exhaustive]
