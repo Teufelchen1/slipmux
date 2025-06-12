@@ -10,7 +10,7 @@ use crate::decoder_no_std::FrameHandler;
 /// The buffers can directly be read by the handlers owner. The owner is also responsible
 /// for clearing the buffer when a frame is completed.
 pub struct OwnedLatestFrame {
-    frame_type: FrameType,
+    frame_type: Option<FrameType>,
     /// Stores the current diagnostic frame
     pub diagnostic_buffer: Vec<u8>,
     /// Stores the current configuration frame
@@ -24,7 +24,7 @@ impl OwnedLatestFrame {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            frame_type: FrameType::Diagnostic,
+            frame_type: None,
             diagnostic_buffer: vec![],
             configuration_buffer: vec![],
             packet_buffer: vec![],
@@ -40,24 +40,33 @@ impl Default for OwnedLatestFrame {
 
 impl FrameHandler for OwnedLatestFrame {
     fn begin_frame(&mut self, frame_type: FrameType) {
-        self.frame_type = frame_type;
+        assert!(
+            self.frame_type.is_none(),
+            "Called .begin_frame when a frame was still in progress, .end_frame must be called before a new frame can be started."
+        );
+        self.frame_type = Some(frame_type);
     }
 
     fn write_byte(&mut self, byte: u8) {
         match &self.frame_type {
-            FrameType::Diagnostic => {
+            Some(FrameType::Diagnostic) => {
                 self.diagnostic_buffer.push(byte);
             }
-            FrameType::Configuration => {
+            Some(FrameType::Configuration) => {
                 self.configuration_buffer.push(byte);
             }
-            FrameType::Ip => {
+            Some(FrameType::Ip) => {
                 self.packet_buffer.push(byte);
+            }
+            None => {
+                panic!("Called .write_byte before .begin_frame, frame_type not set.");
             }
         }
     }
 
-    fn end_frame(&mut self, _: Option<Error>) {}
+    fn end_frame(&mut self, _: Option<Error>) {
+        self.frame_type = None;
+    }
 }
 
 /// A buffered handler for the `Decoder::decode()` function.
@@ -202,6 +211,22 @@ mod tests {
     fn buffered_decoder_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = BufferedDecoder::new();
         slipmux.decode(data)
+    }
+
+    #[test]
+    #[should_panic]
+    fn framehandler_method_beginn_twice() {
+        let mut handler = OwnedLatestFrame::new();
+        handler.begin_frame(FrameType::Diagnostic);
+        handler.begin_frame(FrameType::Configuration);
+    }
+
+    #[test]
+    #[should_panic]
+    fn framehandler_method_write_before_begin() {
+        let mut handler = OwnedLatestFrame::new();
+        handler.write_byte(0xff);
+        handler.begin_frame(FrameType::Configuration);
     }
 
     #[test]
