@@ -13,7 +13,7 @@ pub struct OwnedLatestFrame {
     frame_type: Option<FrameType>,
     /// Stores the current diagnostic frame
     pub diagnostic_buffer: Vec<u8>,
-    /// Stores the current configuration frame
+    /// Stores the current configuration frame, including the FCS checksum
     pub configuration_buffer: Vec<u8>,
     /// Stores the current IP packet
     pub packet_buffer: Vec<u8>,
@@ -74,10 +74,7 @@ impl FrameHandler for OwnedLatestFrame {
 /// It collects completed frames in the `.results` vector. The owner is responsible
 /// for clearing this vector if needed.
 pub struct BufferedFrameHandler {
-    frame_type: FrameType,
-    diagnostic_buffer: Vec<u8>,
-    configuration_buffer: Vec<u8>,
-    packet_buffer: Vec<u8>,
+    subhandler: OwnedLatestFrame,
     /// Contains completed frames
     pub results: Vec<Result<Slipmux, Error>>,
 }
@@ -87,10 +84,7 @@ impl BufferedFrameHandler {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            frame_type: FrameType::Diagnostic,
-            diagnostic_buffer: vec![],
-            configuration_buffer: vec![],
-            packet_buffer: vec![],
+            subhandler: OwnedLatestFrame::new(),
             results: vec![],
         }
     }
@@ -104,50 +98,42 @@ impl Default for BufferedFrameHandler {
 
 impl FrameHandler for BufferedFrameHandler {
     fn begin_frame(&mut self, frame_type: FrameType) {
-        self.frame_type = frame_type;
+        self.subhandler.begin_frame(frame_type);
     }
 
     fn write_byte(&mut self, byte: u8) {
-        match &self.frame_type {
-            FrameType::Diagnostic => {
-                self.diagnostic_buffer.push(byte);
-            }
-            FrameType::Configuration => {
-                self.configuration_buffer.push(byte);
-            }
-            FrameType::Ip => {
-                self.packet_buffer.push(byte);
-            }
-        }
+        self.subhandler.write_byte(byte);
     }
 
     fn end_frame(&mut self, error: Option<Error>) {
         match error {
-            None => match self.frame_type {
-                FrameType::Diagnostic => {
+            None => {
+                if !self.subhandler.diagnostic_buffer.is_empty() {
                     self.results.push(Ok(Slipmux::Diagnostic(
-                        String::from_utf8_lossy(&self.diagnostic_buffer).to_string(),
+                        String::from_utf8_lossy(&self.subhandler.diagnostic_buffer).to_string(),
                     )));
-                    self.diagnostic_buffer.clear();
+                    self.subhandler.diagnostic_buffer.clear();
                 }
-                FrameType::Configuration => {
-                    self.configuration_buffer
-                        .truncate(self.configuration_buffer.len() - 2);
+                if self.subhandler.configuration_buffer.len() > 1 {
+                    self.subhandler
+                        .configuration_buffer
+                        .truncate(self.subhandler.configuration_buffer.len() - 2);
                     self.results.push(Ok(Slipmux::Configuration(
-                        self.configuration_buffer.clone(),
+                        self.subhandler.configuration_buffer.clone(),
                     )));
-                    self.configuration_buffer.clear();
+                    self.subhandler.configuration_buffer.clear();
                 }
-                FrameType::Ip => {
+                if !self.subhandler.packet_buffer.is_empty() {
                     self.results
-                        .push(Ok(Slipmux::Packet(self.packet_buffer.clone())));
-                    self.packet_buffer.clear();
+                        .push(Ok(Slipmux::Packet(self.subhandler.packet_buffer.clone())));
+                    self.subhandler.packet_buffer.clear();
                 }
-            },
+            }
             Some(e) => {
                 self.results.push(Err(e));
             }
         }
+        self.subhandler.end_frame(None);
     }
 }
 
@@ -214,7 +200,9 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(
+        expected = "Called .begin_frame when a frame was still in progress, .end_frame must be called before a new frame can be started."
+    )]
     fn framehandler_method_beginn_twice() {
         let mut handler = OwnedLatestFrame::new();
         handler.begin_frame(FrameType::Diagnostic);
@@ -222,7 +210,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic]
+    #[should_panic(expected = "Called .write_byte before .begin_frame, frame_type not set.")]
     fn framehandler_method_write_before_begin() {
         let mut handler = OwnedLatestFrame::new();
         handler.write_byte(0xff);

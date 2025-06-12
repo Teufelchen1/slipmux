@@ -173,7 +173,9 @@ impl Constants {
 pub enum Slipmux {
     /// A diagnostic frame.
     Diagnostic(String),
-    /// A configuration frame, should contain a coap packet but that is not guaranteed.
+    /// A configuration frame without the FCS.
+    ///
+    /// Should contain a CoAP packet but that is not guaranteed.
     Configuration(Vec<u8>),
     /// An IPv4/6 packet frame.
     Packet(Vec<u8>),
