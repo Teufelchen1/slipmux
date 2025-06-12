@@ -136,14 +136,17 @@ impl Decoder {
                 }
                 (ConfigurationEscape, Constants::ESC_END) => {
                     handler.write_byte(Constants::END);
+                    self.fcs = fcs16_byte(self.fcs, Constants::END);
                     Configuration
                 }
                 (ConfigurationEscape, Constants::ESC_ESC) => {
                     handler.write_byte(Constants::ESC);
+                    self.fcs = fcs16_byte(self.fcs, Constants::ESC);
                     Configuration
                 }
                 (ConfigurationEscape, _) => {
                     handler.write_byte(byte);
+                    self.fcs = fcs16_byte(self.fcs, byte);
                     Configuration
                 }
             }

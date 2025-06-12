@@ -127,10 +127,13 @@ impl FrameHandler for BufferedFrameHandler {
                     self.results.push(Ok(Slipmux::Configuration(
                         self.configuration_buffer.clone(),
                     )));
+                    self.configuration_buffer.clear();
                 }
-                FrameType::Ip => self
-                    .results
-                    .push(Ok(Slipmux::Packet(self.configuration_buffer.clone()))),
+                FrameType::Ip => {
+                    self.results
+                        .push(Ok(Slipmux::Packet(self.packet_buffer.clone())));
+                    self.packet_buffer.clear();
+                }
             },
             Some(e) => {
                 self.results.push(Err(e));
