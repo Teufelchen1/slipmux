@@ -23,6 +23,10 @@ pub enum FrameType {
 }
 
 /// Callback handler for the decoder
+///
+/// This is typically driven by [`Decoder::decode()`], which calls it strictly in the sequence of
+/// [`.begin_frame()`][Self::begin_frame()], any number of [`.write_byte()`][Self::write_byte()]
+/// and then [`.end_frame()`][Self::end_frame()], starting over after that.
 pub trait FrameHandler {
     /// Called when the decoder identifies a frame and starts filling it
     fn begin_frame(&mut self, frame_type: FrameType);

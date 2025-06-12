@@ -9,7 +9,7 @@ use crate::decoder_no_std::FrameHandler;
 /// It tracks the current frame type and writes all bytes into the matching buffer.
 /// The buffers can directly be read by the handlers owner. The owner is also responsible
 /// for clearing the buffer when a frame is completed.
-pub struct SimpleFrameHandler {
+pub struct OwnedLastFrame {
     frame_type: FrameType,
     /// Stores the current diagnostic frame
     pub diagnostic_buffer: Vec<u8>,
@@ -19,7 +19,7 @@ pub struct SimpleFrameHandler {
     pub packet_buffer: Vec<u8>,
 }
 
-impl SimpleFrameHandler {
+impl OwnedLastFrame {
     /// Creates a new handler
     #[must_use]
     pub const fn new() -> Self {
@@ -32,13 +32,13 @@ impl SimpleFrameHandler {
     }
 }
 
-impl Default for SimpleFrameHandler {
+impl Default for OwnedLastFrame {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl FrameHandler for SimpleFrameHandler {
+impl FrameHandler for OwnedLastFrame {
     fn begin_frame(&mut self, frame_type: FrameType) {
         self.frame_type = frame_type;
     }
@@ -152,12 +152,12 @@ mod tests {
     use crate::Slipmux;
     use crate::encode;
     use crate::framehandler::BufferedFrameHandler;
-    use crate::framehandler::SimpleFrameHandler;
+    use crate::framehandler::OwnedLastFrame;
     use coap_lite::Packet;
 
-    fn simple_frame_handler_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
+    fn owned_last_frame_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
-        let mut handler = SimpleFrameHandler::new();
+        let mut handler = OwnedLastFrame::new();
         let mut results: Vec<Result<Slipmux, Error>> = vec![];
         for byte in data {
             match slipmux.decode(*byte, &mut handler) {
@@ -218,7 +218,7 @@ mod tests {
         length += encode(input_packet, &mut buffer[length..]);
 
         let mut slipmux = Decoder::new();
-        let mut handler = SimpleFrameHandler::new();
+        let mut handler = OwnedLastFrame::new();
         for (index, byte) in buffer[..length].iter().enumerate() {
             let result = slipmux.decode(*byte, &mut handler);
             match result {
@@ -267,7 +267,7 @@ mod tests {
 
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
@@ -303,7 +303,7 @@ mod tests {
         ];
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
@@ -339,7 +339,7 @@ mod tests {
         ];
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
@@ -369,7 +369,7 @@ mod tests {
         ];
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
@@ -407,7 +407,7 @@ mod tests {
         ];
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
@@ -471,7 +471,7 @@ mod tests {
 
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for results in results_arr {
@@ -513,7 +513,7 @@ mod tests {
         ];
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
@@ -579,7 +579,7 @@ mod tests {
         ];
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            simple_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_last_frame_wrapper(&SLIPMUX_ENCODED),
             buffered_decoder_wrapper(&SLIPMUX_ENCODED),
         ];
         for frames in results_arr {
