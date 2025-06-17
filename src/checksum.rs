@@ -27,8 +27,8 @@
 // assert_eq!(generate_lookup_table(), FCS_LOOKUP);
 // ```
 
-const INIT_FCS16: u16 = 0xffff;
-const GOOD_FCS16: u16 = 0xf0b8;
+pub const INIT_FCS16: u16 = 0xffff;
+pub const GOOD_FCS16: u16 = 0xf0b8;
 
 const FCS_LOOKUP: [u16; 256] = [
     0x0000, 0x1189, 0x2312, 0x329b, 0x4624, 0x57ad, 0x6536, 0x74bf, 0x8c48, 0x9dc1, 0xaf5a, 0xbed3,
@@ -55,9 +55,13 @@ const FCS_LOOKUP: [u16; 256] = [
     0x3de3, 0x2c6a, 0x1ef1, 0x0f78,
 ];
 
+pub const fn fcs16_byte(fcs: u16, byte: u8) -> u16 {
+    (fcs >> 8) ^ FCS_LOOKUP[(fcs as u8 ^ byte) as usize]
+}
+
 fn fcs16_part(mut fcs: u16, data: &[u8]) -> u16 {
     for byte in data {
-        fcs = (fcs >> 8) ^ FCS_LOOKUP[(fcs as u8 ^ *byte) as usize];
+        fcs = fcs16_byte(fcs, *byte);
     }
     fcs
 }
@@ -67,16 +71,21 @@ pub fn fcs16(data: &[u8]) -> u16 {
     fcs ^ INIT_FCS16
 }
 
-pub fn check_fcs(data: &[u8]) -> bool {
-    let trialfcs = fcs16_part(INIT_FCS16, data);
-    trialfcs == GOOD_FCS16
-}
-
 #[cfg(test)]
 mod tests {
+    use crate::checksum::INIT_FCS16;
+    use crate::checksum::fcs16_part;
+
+    use crate::checksum::GOOD_FCS16;
+
+    fn check_fcs(data: &[u8]) -> bool {
+        let trialfcs = fcs16_part(INIT_FCS16, data);
+        trialfcs == GOOD_FCS16
+    }
+
     #[test]
     fn fcs() {
-        use crate::checksum::{check_fcs, fcs16};
+        use crate::checksum::fcs16;
         let fcs = fcs16(&[0x00, 0x01, 0x02, 0x03]);
         assert_eq!(fcs, 0xa729);
         assert!(check_fcs(&[

@@ -47,9 +47,14 @@
 //! the input. This enables to repeatedly call the decoder with new input data and
 //! if a frame is split between two or more calls, the decoder will correctly concat the frame.
 //!
+//! The decoded bytes of a frame are passed to a `FrameHandler`. The user has to provide a handler either
+//! by implementing one themselves or use one of the provided generic implementations. This example uses
+//! the `BufferedFrameHandler` which is characterized by collecting all frames and errors in to a result
+//! vector of type `Vec<Result<Slipmux, Error>>`.
 //! ```
 //! use slipmux::Slipmux;
 //! use slipmux::Decoder;
+//! use slipmux::BufferedFrameHandler;
 //!
 //! const SLIPMUX_ENCODED: [u8; 15] = [
 //!     0xc0, 0x0a,
@@ -58,7 +63,11 @@
 //! ];
 //!
 //! let mut slipmux = Decoder::new();
-//! let mut results = slipmux.decode(&SLIPMUX_ENCODED);
+//! let mut handler = BufferedFrameHandler::new();
+//! for byte in &SLIPMUX_ENCODED {
+//!     let _: Result<slipmux::DecodeStatus, slipmux::Error> = slipmux.decode(*byte, &mut handler);
+//! }
+//! let mut results = handler.results;
 //! assert_eq!(results.len(), 1);
 //! let frame = results.pop().unwrap();
 //! assert!(frame.is_ok());
@@ -68,60 +77,23 @@
 //! }
 //!
 //! ```
-//!
-//! If you keep getting new input data, try iterating through the result:
-//!
-//! ```
-//! use slipmux::Slipmux;
-//! use slipmux::Decoder;
-//!
-//! const SLIPMUX_ENCODED: [u8; 45] = [
-//!     0xc0, 0x0a,
-//!     0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21,
-//!     0xc0,
-//!     0xc0, 0x0a,
-//!     0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21,
-//!     0xc0,
-//!     0xc0, 0x0a,
-//!     0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21,
-//!     0xc0,
-//! ];
-//!
-//! let mut slipmux = Decoder::new();
-//!
-//! for input_slice in SLIPMUX_ENCODED.chunks(4) {
-//!     for slipframe in slipmux.decode(&input_slice) {
-//!         if slipframe.is_err() {
-//!            panic!();
-//!         }
-//!         match slipframe.unwrap() {
-//!             Slipmux::Diagnostic(s) => {
-//!                 assert_eq!(s, "Hello World!")
-//!             }
-//!             Slipmux::Configuration(conf) => {
-//!                 // Do stuff
-//!             }
-//!             Slipmux::Packet(packet) => {
-//!                 // Do stuff
-//!             }
-//!         }
-//!     }
-//! }
-//!
-//! ```
-use checksum::check_fcs;
-use serial_line_ip::Error as SlipError;
 
 mod checksum;
 mod decoder;
 mod encode;
+mod framehandler;
 
 pub use encode::encode;
 pub use encode::encode_configuration;
 pub use encode::encode_diagnostic;
 pub use encode::encode_packet;
 
+pub use decoder::DecodeStatus;
 pub use decoder::Decoder;
+pub use decoder::FrameHandler;
+
+pub use framehandler::BufferedFrameHandler;
+pub use framehandler::OwnedLatestFrame;
 
 /// Magic byte constants used in Slipmux
 #[non_exhaustive]
@@ -164,7 +136,9 @@ impl Constants {
 pub enum Slipmux {
     /// A diagnostic frame.
     Diagnostic(String),
-    /// A configuration frame, should contain a coap packet but that is not guaranteed.
+    /// A configuration frame without the FCS.
+    ///
+    /// Should contain a CoAP packet but that is not guaranteed.
     Configuration(Vec<u8>),
     /// An IPv4/6 packet frame.
     Packet(Vec<u8>),
@@ -205,7 +179,11 @@ mod tests {
         length += encode(input_packet, &mut buffer[length..]);
 
         let mut slipmux = Decoder::new();
-        let frames = slipmux.decode(&buffer[..length]);
+        let mut handler = BufferedFrameHandler::new();
+        for byte in &buffer[..length] {
+            let _: Result<DecodeStatus, Error> = slipmux.decode(*byte, &mut handler);
+        }
+        let frames = handler.results;
         assert_eq!(3, frames.len());
         for slipframe in frames {
             match slipframe {
@@ -277,8 +255,13 @@ mod tests {
         let length = encode_packet(IP4_FOO.to_vec(), &mut buffer);
         assert_eq!(length, 126);
         let mut slipmux = Decoder::new();
+        let mut handler = BufferedFrameHandler::new();
+        for byte in &buffer[..length] {
+            let _: Result<DecodeStatus, Error> = slipmux.decode(*byte, &mut handler);
+        }
+        let mut frames = handler.results;
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
+        let decoded = frames.pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip4_foo) => assert_eq!(decoded_ip4_foo, IP4_FOO),
             _ => unreachable!(),
@@ -287,8 +270,13 @@ mod tests {
         let length = encode_packet(IP4_BAR.to_vec(), &mut buffer);
         assert_eq!(length, 92);
         let mut slipmux = Decoder::new();
+        let mut handler = BufferedFrameHandler::new();
+        for byte in &buffer[..length] {
+            let _: Result<DecodeStatus, Error> = slipmux.decode(*byte, &mut handler);
+        }
+        let mut frames = handler.results;
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
+        let decoded = frames.pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip4_bar) => assert_eq!(decoded_ip4_bar, IP4_BAR),
             _ => unreachable!(),
@@ -298,8 +286,13 @@ mod tests {
         // On byte extra to escape a 0xc0 / END
         assert_eq!(length, 150);
         let mut slipmux = Decoder::new();
+        let mut handler = BufferedFrameHandler::new();
+        for byte in &buffer[..length] {
+            let _: Result<DecodeStatus, Error> = slipmux.decode(*byte, &mut handler);
+        }
+        let mut frames = handler.results;
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
+        let decoded = frames.pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip6_foo) => assert_eq!(decoded_ip6_foo, IP6_FOO),
             _ => unreachable!(),
@@ -308,8 +301,13 @@ mod tests {
         let length = encode_packet(IP6_BAR.to_vec(), &mut buffer);
         assert_eq!(length, 107);
         let mut slipmux = Decoder::new();
+        let mut handler = BufferedFrameHandler::new();
+        for byte in &buffer[..length] {
+            let _: Result<DecodeStatus, Error> = slipmux.decode(*byte, &mut handler);
+        }
+        let mut frames = handler.results;
         // Pop should be safe as we expect exactly one frame
-        let decoded = slipmux.decode(&buffer[..length]).pop().unwrap();
+        let decoded = frames.pop().unwrap();
         match decoded.unwrap() {
             Slipmux::Packet(decoded_ip6_bar) => assert_eq!(decoded_ip6_bar, IP6_BAR),
             _ => unreachable!(),
