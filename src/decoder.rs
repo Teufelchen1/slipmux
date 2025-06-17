@@ -85,6 +85,7 @@ impl Decoder {
     /// Will return `Err` if either:
     ///     - an unkown frame type is encountered
     ///     - the checksum of a configuration frame is bad
+    ///     - a frame got aborted
     #[allow(clippy::match_same_arms)]
     #[allow(clippy::too_many_lines)]
     pub fn decode<H: FrameHandler>(
@@ -138,6 +139,11 @@ impl Decoder {
                     handler.write_byte(Constants::ESC);
                     Diagnostic
                 }
+                (DiagnosticEscape, Constants::END) => {
+                    self.state = Idle;
+                    handler.end_frame(Some(Error::Abort));
+                    return Err(Error::Abort);
+                }
                 (DiagnosticEscape, _) => {
                     handler.write_byte(byte);
                     Diagnostic
@@ -168,6 +174,11 @@ impl Decoder {
                     self.fcs = fcs16_byte(self.fcs, Constants::ESC);
                     Configuration
                 }
+                (ConfigurationEscape, Constants::END) => {
+                    self.state = Idle;
+                    handler.end_frame(Some(Error::Abort));
+                    return Err(Error::Abort);
+                }
                 (ConfigurationEscape, _) => {
                     handler.write_byte(byte);
                     self.fcs = fcs16_byte(self.fcs, byte);
@@ -191,6 +202,11 @@ impl Decoder {
                 (IpEscape, Constants::ESC_ESC) => {
                     handler.write_byte(Constants::ESC);
                     Ip
+                }
+                (IpEscape, Constants::END) => {
+                    self.state = Idle;
+                    handler.end_frame(Some(Error::Abort));
+                    return Err(Error::Abort);
                 }
                 (IpEscape, _) => {
                     handler.write_byte(byte);
