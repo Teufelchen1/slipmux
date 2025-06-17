@@ -4,13 +4,17 @@ categories = ["encoding"]
 edition = "2024"
 description = "Slipmux de- and encoding"
 homepage = "https://github.com/teufelchen1/slipmux"
-keywords = ["slip", "serial", "uart", "framing", "coap"]
+keywords = ["slip", "serial", "uart", "framing", "coap", "no_std"]
 
 license = "MIT OR Apache-2.0"
 name = "slipmux"
 readme = "README.md"
 repository = "https://github.com/teufelchen1/slipmux"
 version = "0.3.0"
+
+[features]
+default = ["std"]
+std = []
 
 [lints.rust]
 missing_docs = "warn"

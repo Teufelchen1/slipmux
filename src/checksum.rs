@@ -29,6 +29,8 @@
 
 pub const INIT_FCS16: u16 = 0xffff;
 pub const GOOD_FCS16: u16 = 0xf0b8;
+// Created by starting a fcs with the conf-framestart byte 0xa9
+pub const CONF_FCS16: u16 = 0x374c;
 
 const FCS_LOOKUP: [u16; 256] = [
     0x0000, 0x1189, 0x2312, 0x329b, 0x4624, 0x57ad, 0x6536, 0x74bf, 0x8c48, 0x9dc1, 0xaf5a, 0xbed3,
@@ -59,15 +61,14 @@ pub const fn fcs16_byte(fcs: u16, byte: u8) -> u16 {
     (fcs >> 8) ^ FCS_LOOKUP[(fcs as u8 ^ byte) as usize]
 }
 
-fn fcs16_part(mut fcs: u16, data: &[u8]) -> u16 {
+pub fn fcs16_part(mut fcs: u16, data: &[u8]) -> u16 {
     for byte in data {
         fcs = fcs16_byte(fcs, *byte);
     }
     fcs
 }
 
-pub fn fcs16(data: &[u8]) -> u16 {
-    let fcs = fcs16_part(INIT_FCS16, data);
+pub const fn fcs16_finish(fcs: u16) -> u16 {
     fcs ^ INIT_FCS16
 }
 
@@ -83,9 +84,13 @@ mod tests {
         trialfcs == GOOD_FCS16
     }
 
+    fn fcs16(data: &[u8]) -> u16 {
+        let fcs = fcs16_part(INIT_FCS16, data);
+        fcs ^ INIT_FCS16
+    }
+
     #[test]
     fn fcs() {
-        use crate::checksum::fcs16;
         let fcs = fcs16(&[0x00, 0x01, 0x02, 0x03]);
         assert_eq!(fcs, 0xa729);
         assert!(check_fcs(&[

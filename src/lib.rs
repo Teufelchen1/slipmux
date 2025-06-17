@@ -2,8 +2,6 @@
 //!
 //! Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
 //!
-//! Note: Frame aborting is not implemented!
-//!
 //! ## What is Slipmux
 //!
 //! Slipmux is a very simple framing and multiplexing protocol. It uses RFC1055,
@@ -20,24 +18,34 @@
 //!
 //! ### Encoding
 //!
-//! Encoding is done in a single pass.
-//! First wrap your data in the matching type of the `Slipmux` enum. Then
-//! feed it into the `encode()` function.
-//! Alternatively, use the helper functions `encode_diagnostic()`, `encode_configurtation()` and `encode_packet()`.
+//! Encoding can be done in a single pass.
+//! First wrap your data in the matching type of the [`Slipmux`] enum. Then
+//! feed it into the [`encode_buffered()`] function. You can also use the [`encode()`] function and
+//! provide the [`FrameType`] and buffers manually, intended for `no_std` usage.
+//! Alternatively, use the helper functions [`encode_diagnostic()`], [`encode_configuration()`],
+//! [`encode_packet()`].
 //!
 //! ```
+//! use slipmux::FrameType;
 //! use slipmux::Slipmux;
 //! use slipmux::encode;
+//! use slipmux::encode_buffered;
+//! use slipmux::encode_configuration;
 //! use coap_lite::Packet;
 //!
-//! let mut buffer: [u8; 2048] = [0; 2048];
+//! /* Typical use with std-feature: */
 //! let input = Slipmux::Diagnostic("Hello World!".to_owned());
-//! let length = encode(input, &mut buffer);
-//! assert_eq!(buffer[..length], *b"\xc0\x0aHello World!\xc0");
+//! let buffer = encode_buffered(input);
+//! assert_eq!(buffer, *b"\xc0\x0aHello World!\xc0");
 //!
-//! let input = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
-//! let length = encode(input, &mut buffer);
-//! assert_eq!(buffer[..length], [0xc0, 0xa9, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, 0xc0]);
+//! /* Typical use on no_std */
+//! let mut own_buffer: [u8; 256] = [0; 256];
+//! let length = encode(FrameType::Diagnostic, "Hello World!".as_bytes(), &mut own_buffer);
+//! assert_eq!(buffer, own_buffer[..length]);
+//!
+//! /* Example with configuration */
+//! let length = encode_configuration(&Packet::new().to_bytes().unwrap(), &mut own_buffer);
+//! assert_eq!(own_buffer[..length], [0xc0, 0xa9, 0x40, 0x01, 0x00, 0x00, 0xbc, 0x38, 0xc0]);
 //! ```
 //!
 //! ### Decoding
@@ -47,9 +55,9 @@
 //! the input. This enables to repeatedly call the decoder with new input data and
 //! if a frame is split between two or more calls, the decoder will correctly concat the frame.
 //!
-//! The decoded bytes of a frame are passed to a `FrameHandler`. The user has to provide a handler either
+//! The decoded bytes of a frame are passed to a [`FrameHandler`]. The user has to provide a handler either
 //! by implementing one themselves or use one of the provided generic implementations. This example uses
-//! the `BufferedFrameHandler` which is characterized by collecting all frames and errors in to a result
+//! the [`BufferedFrameHandler`] which is characterized by collecting all frames and errors in to a result
 //! vector of type `Vec<Result<Slipmux, Error>>`.
 //! ```
 //! use slipmux::Slipmux;
@@ -75,15 +83,63 @@
 //!     Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
 //!     _ => panic!(),
 //! }
+//! ```
+//!
+//! This crate is `#[no_std]` friendly. If you disable the default feature `std`, you will have to use the
+//! [`ReferencedLatestFrame`] as a [`FrameHandler`] or implement your own.
+//! ```
+//! use slipmux::Decoder;
+//! use slipmux::DecodeStatus;
+//! use slipmux::ReferencedLatestFrame;
+//!
+//! const SLIPMUX_ENCODED: [u8; 15] = [
+//!     0xc0, 0x0a,
+//!     0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64, 0x21,
+//!     0xc0
+//! ];
+//!
+//! /* In no_std, we have to provide the buffer -> we choose where and how much memory we reserve */
+//! let mut diagnostic_buffer: [u8; 64] = [0; 64];
+//! let mut configuration_buffer: [u8; 64] = [0; 64];
+//! let mut packet_buffer: [u8; 64] = [0; 64];
+//!
+//! let mut slipmux = Decoder::new();
+//! let mut handler = ReferencedLatestFrame::new(
+//!                       &mut diagnostic_buffer,
+//!                       &mut configuration_buffer,
+//!                       &mut packet_buffer
+//!                   );
+//! for byte in SLIPMUX_ENCODED {
+//!     match slipmux.decode(byte, &mut handler) {
+//!         Ok(DecodeStatus::Incomplete) => {}
+//!         Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+//!             /* Once we are informed that a frame is ready, we can process it as we please */
+//!             assert_eq!(handler.diagnostic_buffer[..handler.index], *b"Hello World!");
+//!             /* Since we own the memory, we are responsible for (de-)allocation and reset */
+//!             handler.diagnostic_buffer.fill(0);
+//!         }
+//!         Ok(DecodeStatus::FrameCompleteConfiguration) => {
+//!             /* ... do the same or something else for the other frame types */
+//!         }
+//!         Ok(DecodeStatus::FrameCompleteIp) => {
+//!             /* ... */
+//!         }
+//!         Err(_) => {
+//!             /* ... we decide what to do when something goes wrong */
+//!         }
+//!     }
+//! }
 //!
 //! ```
-
+#![cfg_attr(not(feature = "std"), no_std)]
 mod checksum;
 mod decoder;
 mod encode;
 mod framehandler;
 
 pub use encode::encode;
+#[cfg(feature = "std")]
+pub use encode::encode_buffered;
 pub use encode::encode_configuration;
 pub use encode::encode_diagnostic;
 pub use encode::encode_packet;
@@ -92,8 +148,11 @@ pub use decoder::DecodeStatus;
 pub use decoder::Decoder;
 pub use decoder::FrameHandler;
 
+#[cfg(feature = "std")]
 pub use framehandler::BufferedFrameHandler;
+#[cfg(feature = "std")]
 pub use framehandler::OwnedLatestFrame;
+pub use framehandler::ReferencedLatestFrame;
 
 /// Magic byte constants used in Slipmux
 #[non_exhaustive]
@@ -132,13 +191,25 @@ impl Constants {
 }
 
 /// The frame types that Slipmux offers
+#[derive(Debug, Copy, Clone)]
+pub enum FrameType {
+    /// A diagnostic frame type.
+    Diagnostic,
+    /// A configuration frame type.
+    Configuration,
+    /// IPv4/6 packet frame type.
+    Ip,
+}
+
+/// A Slipmux frame and its data
 #[derive(Debug)]
+#[cfg(feature = "std")]
 pub enum Slipmux {
     /// A diagnostic frame.
     Diagnostic(String),
     /// A configuration frame without the FCS.
     ///
-    /// Should contain a CoAP packet but that is not guaranteed.
+    /// Should contain a valid CoAP packet but that is not guaranteed.
     Configuration(Vec<u8>),
     /// An IPv4/6 packet frame.
     Packet(Vec<u8>),
@@ -157,32 +228,32 @@ pub enum Error {
     /// The decoder encountered an unkown frame type.
     BadFrameType(u8),
     /// The frame checksum was invalid.
-    BadFCS(Vec<u8>),
+    BadFCS,
     /// The frame got aborted
     Abort,
 }
 
 #[cfg(test)]
+#[cfg(feature = "std")]
 mod tests {
     use super::*;
+    use crate::encode::encode_buffered;
     use coap_lite::Packet;
 
     #[test]
     fn encode_decode_all_frametypes() {
-        let mut buffer: [u8; 2048] = [0; 2048];
-
         let input_diagnostic = Slipmux::Diagnostic("Hello World!".to_owned());
-        let mut length = encode(input_diagnostic, &mut buffer);
+        let mut buffer = encode_buffered(input_diagnostic);
 
         let input_configuration = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
-        length += encode(input_configuration, &mut buffer[length..]);
+        buffer.append(&mut encode_buffered(input_configuration));
 
         let input_packet = Slipmux::Packet(vec![0x60, 0x0d, 0xda, 0x01, 0xfe, 0x80]);
-        length += encode(input_packet, &mut buffer[length..]);
+        buffer.append(&mut encode_buffered(input_packet));
 
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
-        for byte in &buffer[..length] {
+        for byte in &buffer {
             let _: Result<DecodeStatus, Error> = slipmux.decode(*byte, &mut handler);
         }
         let frames = handler.results;
@@ -254,7 +325,7 @@ mod tests {
 
         let mut buffer: [u8; 2048] = [0; 2048];
 
-        let length = encode_packet(IP4_FOO.to_vec(), &mut buffer);
+        let length = encode_packet(&IP4_FOO, &mut buffer);
         assert_eq!(length, 126);
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
@@ -269,7 +340,7 @@ mod tests {
             _ => unreachable!(),
         }
 
-        let length = encode_packet(IP4_BAR.to_vec(), &mut buffer);
+        let length = encode_packet(&IP4_BAR, &mut buffer);
         assert_eq!(length, 92);
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
@@ -284,7 +355,7 @@ mod tests {
             _ => unreachable!(),
         }
 
-        let length = encode_packet(IP6_FOO.to_vec(), &mut buffer);
+        let length = encode_packet(&IP6_FOO, &mut buffer);
         // On byte extra to escape a 0xc0 / END
         assert_eq!(length, 150);
         let mut slipmux = Decoder::new();
@@ -300,7 +371,7 @@ mod tests {
             _ => unreachable!(),
         }
 
-        let length = encode_packet(IP6_BAR.to_vec(), &mut buffer);
+        let length = encode_packet(&IP6_BAR, &mut buffer);
         assert_eq!(length, 107);
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();

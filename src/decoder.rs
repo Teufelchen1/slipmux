@@ -1,4 +1,5 @@
 use crate::Constants;
+use crate::FrameType;
 use crate::checksum::{GOOD_FCS16, INIT_FCS16, fcs16_byte};
 
 use crate::Error;
@@ -18,12 +19,6 @@ use SlipmuxState::{
     Configuration, ConfigurationEscape, Diagnostic, DiagnosticEscape, Idle, Ip, IpEscape,
     UnkownFrameType,
 };
-
-pub enum FrameType {
-    Diagnostic,
-    Configuration,
-    Ip,
-}
 
 /// Callback handler for the decoder
 ///
@@ -82,10 +77,8 @@ impl Decoder {
     ///
     /// # Errors
     ///
-    /// Will return `Err` if either:
-    ///     - an unkown frame type is encountered
-    ///     - the checksum of a configuration frame is bad
-    ///     - a frame got aborted
+    /// Will return `Err` if either  an unkown frame type is encountered OR the checksum of a
+    /// configuration frame is bad OR a frame got aborted.
     #[allow(clippy::match_same_arms)]
     #[allow(clippy::too_many_lines)]
     pub fn decode<H: FrameHandler>(
@@ -156,8 +149,8 @@ impl Decoder {
                         handler.end_frame(None);
                         return Ok(DecodeStatus::FrameCompleteConfiguration);
                     }
-                    handler.end_frame(Some(Error::BadFCS(vec![])));
-                    return Err(Error::BadFCS(vec![]));
+                    handler.end_frame(Some(Error::BadFCS));
+                    return Err(Error::BadFCS);
                 }
                 (Configuration, _) => {
                     handler.write_byte(byte);

@@ -1,14 +1,84 @@
 use crate::Error;
+use crate::FrameType;
+#[cfg(feature = "std")]
 use crate::Slipmux;
-use crate::decoder::FrameType;
 
 use crate::decoder::FrameHandler;
+
+/// A simple `no_std` handler for the `Decoder::decode()` function.
+///
+/// It tracks the current frame type and writes all bytes into the matching buffer.
+/// The buffers can directly be read by the handlers owner. The owner is also responsible
+/// for clearing the buffer when a frame is completed.
+pub struct ReferencedLatestFrame<'a> {
+    /// Current offset from start of the buffer
+    pub index: usize,
+    frame_type: Option<FrameType>,
+    /// Destination of the current diagnostic frame
+    pub diagnostic_buffer: &'a mut [u8],
+    /// Destination of the current configuration frame, including the FCS checksum
+    pub configuration_buffer: &'a mut [u8],
+    /// Destination of the current IP packet
+    pub packet_buffer: &'a mut [u8],
+}
+
+impl<'a> ReferencedLatestFrame<'a> {
+    /// Creates a new handler
+    #[must_use]
+    pub const fn new(
+        diagnostic_buffer: &'a mut [u8],
+        configuration_buffer: &'a mut [u8],
+        packet_buffer: &'a mut [u8],
+    ) -> Self {
+        Self {
+            index: 0,
+            frame_type: None,
+            diagnostic_buffer,
+            configuration_buffer,
+            packet_buffer,
+        }
+    }
+}
+
+impl FrameHandler for ReferencedLatestFrame<'_> {
+    fn begin_frame(&mut self, frame_type: FrameType) {
+        assert!(
+            self.frame_type.is_none(),
+            "Called .begin_frame when a frame was still in progress, .end_frame must be called before a new frame can be started."
+        );
+        self.frame_type = Some(frame_type);
+        self.index = 0;
+    }
+
+    fn write_byte(&mut self, byte: u8) {
+        match &self.frame_type {
+            Some(FrameType::Diagnostic) => {
+                self.diagnostic_buffer[self.index] = byte;
+            }
+            Some(FrameType::Configuration) => {
+                self.configuration_buffer[self.index] = byte;
+            }
+            Some(FrameType::Ip) => {
+                self.packet_buffer[self.index] = byte;
+            }
+            None => {
+                panic!("Called .write_byte before .begin_frame, frame_type not set.");
+            }
+        }
+        self.index += 1;
+    }
+
+    fn end_frame(&mut self, _: Option<Error>) {
+        self.frame_type = None;
+    }
+}
 
 /// A simple handler for the `Decoder::decode()` function.
 ///
 /// It tracks the current frame type and writes all bytes into the matching buffer.
 /// The buffers can directly be read by the handlers owner. The owner is also responsible
 /// for clearing the buffer when a frame is completed.
+#[cfg(feature = "std")]
 pub struct OwnedLatestFrame {
     frame_type: Option<FrameType>,
     /// Stores the current diagnostic frame
@@ -19,6 +89,7 @@ pub struct OwnedLatestFrame {
     pub packet_buffer: Vec<u8>,
 }
 
+#[cfg(feature = "std")]
 impl OwnedLatestFrame {
     /// Creates a new handler
     #[must_use]
@@ -32,12 +103,14 @@ impl OwnedLatestFrame {
     }
 }
 
+#[cfg(feature = "std")]
 impl Default for OwnedLatestFrame {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "std")]
 impl FrameHandler for OwnedLatestFrame {
     fn begin_frame(&mut self, frame_type: FrameType) {
         assert!(
@@ -73,12 +146,14 @@ impl FrameHandler for OwnedLatestFrame {
 ///
 /// It collects completed frames in the `.results` vector. The owner is responsible
 /// for clearing this vector if needed.
+#[cfg(feature = "std")]
 pub struct BufferedFrameHandler {
     subhandler: OwnedLatestFrame,
     /// Contains completed frames
     pub results: Vec<Result<Slipmux, Error>>,
 }
 
+#[cfg(feature = "std")]
 impl BufferedFrameHandler {
     /// Creates a new hander
     #[must_use]
@@ -90,12 +165,14 @@ impl BufferedFrameHandler {
     }
 }
 
+#[cfg(feature = "std")]
 impl Default for BufferedFrameHandler {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "std")]
 impl FrameHandler for BufferedFrameHandler {
     fn begin_frame(&mut self, frame_type: FrameType) {
         self.subhandler.begin_frame(frame_type);
@@ -140,6 +217,7 @@ impl FrameHandler for BufferedFrameHandler {
     }
 }
 
+#[cfg(feature = "std")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,7 +225,7 @@ mod tests {
     use crate::DecodeStatus;
     use crate::Decoder;
     use crate::Slipmux;
-    use crate::encode;
+    use crate::encode::encode_buffered;
     use crate::framehandler::BufferedFrameHandler;
     use crate::framehandler::OwnedLatestFrame;
     use coap_lite::Packet;
@@ -187,6 +265,48 @@ mod tests {
         results
     }
 
+    fn referenced_latest_frame_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
+        let mut diagnostic_buffer: [u8; 64] = [0; 64];
+        let mut configuration_buffer: [u8; 64] = [0; 64];
+        let mut packet_buffer: [u8; 64] = [0; 64];
+        let mut slipmux = Decoder::new();
+        let mut handler = ReferencedLatestFrame::new(
+            &mut diagnostic_buffer,
+            &mut configuration_buffer,
+            &mut packet_buffer,
+        );
+        let mut results: Vec<Result<Slipmux, Error>> = vec![];
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    results.push(Ok(Slipmux::Diagnostic(
+                        String::from_utf8_lossy(&handler.diagnostic_buffer[..handler.index])
+                            .to_string(),
+                    )));
+                    handler.diagnostic_buffer.fill(0);
+                }
+                Ok(DecodeStatus::FrameCompleteConfiguration) => {
+                    // Drop the FCS at the end
+                    results.push(Ok(Slipmux::Configuration(
+                        handler.configuration_buffer[..handler.index - 2].to_vec(),
+                    )));
+                    handler.configuration_buffer.fill(0);
+                }
+                Ok(DecodeStatus::FrameCompleteIp) => {
+                    results.push(Ok(Slipmux::Packet(
+                        handler.packet_buffer[..handler.index - 2].to_vec(),
+                    )));
+                    handler.packet_buffer.fill(0);
+                }
+                Err(err) => {
+                    results.push(Err(err));
+                }
+            }
+        }
+        results
+    }
+
     fn buffered_frame_handler_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
@@ -216,20 +336,18 @@ mod tests {
 
     #[test]
     fn encode_decode_all_frametypes() {
-        let mut buffer: [u8; 2048] = [0; 2048];
-
         let input_diagnostic = Slipmux::Diagnostic("Hello World!".to_owned());
-        let mut length = encode(input_diagnostic, &mut buffer);
+        let mut buffer = encode_buffered(input_diagnostic);
 
         let input_configuration = Slipmux::Configuration(Packet::new().to_bytes().unwrap());
-        length += encode(input_configuration, &mut buffer[length..]);
+        buffer.append(&mut encode_buffered(input_configuration));
 
         let input_packet = Slipmux::Packet(vec![0x60, 0x0d, 0xda, 0x01, 0xfe, 0x80]);
-        length += encode(input_packet, &mut buffer[length..]);
+        buffer.append(&mut encode_buffered(input_packet));
 
         let mut slipmux = Decoder::new();
         let mut handler = OwnedLatestFrame::new();
-        for (index, byte) in buffer[..length].iter().enumerate() {
+        for (index, byte) in buffer.iter().enumerate() {
             let result = slipmux.decode(*byte, &mut handler);
             match result {
                 Ok(DecodeStatus::FrameCompleteConfiguration) => {
@@ -280,6 +398,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -315,6 +434,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -350,11 +470,12 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
-            assert!(matches!(frame, Err(Error::BadFCS(_))));
+            assert!(matches!(frame, Err(Error::BadFCS)));
         }
     }
 
@@ -379,6 +500,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -416,6 +538,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -479,6 +602,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for results in results_arr {
             for slipframe in results {
@@ -520,6 +644,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -564,6 +689,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 2);
@@ -633,6 +759,7 @@ mod tests {
         let results_arr = [
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
         ];
         for frames in results_arr {
             assert_eq!(frames.len(), 3);
