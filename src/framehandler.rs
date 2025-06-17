@@ -131,6 +131,9 @@ impl FrameHandler for BufferedFrameHandler {
             }
             Some(e) => {
                 self.results.push(Err(e));
+                self.subhandler.diagnostic_buffer.clear();
+                self.subhandler.configuration_buffer.clear();
+                self.subhandler.packet_buffer.clear();
             }
         }
         self.subhandler.end_frame(None);
@@ -525,6 +528,54 @@ mod tests {
             match frame {
                 Err(Error::BadFrameType(0x50)) => {} // expected case
                 _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn frame_abort() {
+        const SLIPMUX_ENCODED: [u8; 25] = [
+            Constants::END,
+            Constants::CONFIGURATION,
+            0x48,
+            0x65,
+            0x6c,
+            0x6c,
+            0x6f,
+            0x20,
+            0x57,
+            Constants::ESC,
+            Constants::END,
+            Constants::DIAGNOSTIC,
+            0x48,
+            0x65,
+            0x6c,
+            0x6c,
+            0x6f,
+            0x20,
+            0x57,
+            0x6f,
+            0x72,
+            0x6c,
+            0x64,
+            0x21,
+            Constants::END,
+        ];
+        let results_arr = [
+            buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
+            owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
+        ];
+        for mut results in results_arr {
+            assert_eq!(results.len(), 2);
+            let frame = results.pop().unwrap();
+            match frame.unwrap() {
+                Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
+                _ => unreachable!(),
+            }
+            let frame = results.pop().unwrap();
+            match frame {
+                Ok(_) => unreachable!(),
+                Err(e) => assert!(matches!(e, Error::Abort)),
             }
         }
     }

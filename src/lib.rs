@@ -158,6 +158,8 @@ pub enum Error {
     BadFrameType(u8),
     /// The frame checksum was invalid.
     BadFCS(Vec<u8>),
+    /// The frame got aborted
+    Abort,
 }
 
 #[cfg(test)]
