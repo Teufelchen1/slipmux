@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Reworked encoding to use a passed buffer rather than their own
+- Introduced reference based frame handler for no_std
+- Reworked encoding for no_std
+- Make crate no_std compatible
 
 ## [0.2.0] - 2025-04-09
 
