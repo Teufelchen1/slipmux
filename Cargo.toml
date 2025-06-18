@@ -12,6 +12,10 @@ readme = "README.md"
 repository = "https://github.com/teufelchen1/slipmux"
 version = "0.3.0"
 
+[features]
+default = ["std"]
+std = []
+
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
