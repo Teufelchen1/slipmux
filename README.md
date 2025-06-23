@@ -1,9 +1,10 @@
 [![Clippy & co](https://github.com/Teufelchen1/slipmux/actions/workflows/rust.yml/badge.svg)](https://github.com/Teufelchen1/slipmux/actions/workflows/rust.yml)
+[![Crates.io](https://img.shields.io/crates/v/slipmux.svg)](https://crates.io/crates/slipmux)
+[![Documentation](https://docs.rs/slipmux/badge.svg)](https://docs.rs/slipmux)
 # Slipmux: Using an UART interface for diagnostics, configuration, and packet transfer
 
 Pure Rust implementation of [draft-bormann-t2trg-slipmux-03](https://datatracker.ietf.org/doc/html/draft-bormann-t2trg-slipmux-03).
 
-Note: Frame aborting is not implemented!
 
 ## What is Slipmux
 
@@ -15,6 +16,13 @@ diagnostic frames and configuration messages.
 Diagnostic frames are UTF-8 encoded strings intended as human-readable messages.
 Configuration messages are serialized `CoAP` messages.
 
+## Usage
+
+Add `slipmux` to the dependencies in your `Cargo.toml`. This crate requires `std` by default via the `std` feature. You can disable this by adding `default-features = false` to the entry, which will make this crate `no_std` compatible.
+
+Check [docs.rs](https://docs.rs/slipmux/latest/slipmux/) for examples and documentation on the programming API.
+For even more examples, take a look at the unittests on the bottom of [src/framehandler.rs](https://github.com/Teufelchen1/slipmux/blob/main/src/framehandler.rs).
+
 ## Todo
 
 - [x] Remove coap-lite dep
@@ -24,12 +32,13 @@ Configuration messages are serialized `CoAP` messages.
 - [x] Implement frame abort
 	- [ ] Encoder (this crate does not take control over the transmission, it has no way of aborting)
 	- [x] Decoder
-- [ ] Make crate optional `#[no_std]`
-- [ ] Rethink public interfaces (generalise the usability):
-	- [ ] Currently wild mix of `[u8]` and `Vec<u8>`
-	- [ ] Impossible to know if the deocder is completely done or if bytes remain in its buffer
-	- [ ] Error handling is tedious
+- [x] Make crate optional `#[no_std]`
+- [x] Rethink public interfaces (generalise the usability):
+	- [x] Currently wild mix of `[u8]` and `Vec<u8>`
+	- [x] Impossible to know if the deocder is completely done or if bytes remain in its buffer
+	- [x] Error handling is tedious
 - [ ] Interoperability tests with other slipmux implementations
+- [ ] Polishing, QoL improvments, incorporating feedback from experienced crate publishern
 
 ## License
 
