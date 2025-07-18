@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed a bug in `encode_buffered()` where the amount of space needed to encode a configuration frame was off by up to five bytes (missed checksum + endbyte at start)
+
 ## [0.3.1] - 2025-06-23
 
 ### Removed
