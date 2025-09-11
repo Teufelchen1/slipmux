@@ -1,11 +1,10 @@
 [package]
 authors = ["Bennet Hattesen <bennet.hattesen@haw-hamburg.de>"]
 categories = ["encoding"]
-edition = "2024"
 description = "Slipmux de- and encoding"
+edition = "2024"
 homepage = "https://github.com/teufelchen1/slipmux"
 keywords = ["slip", "serial", "uart", "coap", "no_std"]
-
 license = "MIT OR Apache-2.0"
 name = "slipmux"
 readme = "README.md"
@@ -26,7 +25,6 @@ cargo_common_metadata = "warn"
 let_underscore_untyped = "warn"
 str_to_string = "warn"
 
-cast_possible_truncation = "allow"
 option-if-let-else = "allow"
 single_match_else = "allow"
 
