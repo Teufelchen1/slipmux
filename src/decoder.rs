@@ -79,8 +79,8 @@ impl Decoder {
     ///
     /// Will return `Err` if either  an unkown frame type is encountered OR the checksum of a
     /// configuration frame is bad OR a frame got aborted.
-    #[allow(clippy::match_same_arms)]
-    #[allow(clippy::too_many_lines)]
+    #[expect(clippy::match_same_arms)]
+    #[expect(clippy::too_many_lines)]
     pub fn decode<H: FrameHandler>(
         &mut self,
         byte: u8,
