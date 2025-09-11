@@ -206,8 +206,8 @@ impl FrameHandler for BufferedFrameHandler {
                     self.subhandler.packet_buffer.clear();
                 }
             }
-            Some(e) => {
-                self.results.push(Err(e));
+            Some(error) => {
+                self.results.push(Err(error));
                 self.subhandler.diagnostic_buffer.clear();
                 self.subhandler.configuration_buffer.clear();
                 self.subhandler.packet_buffer.clear();
@@ -404,7 +404,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
+                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -440,7 +440,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Configuration(s) => assert_eq!(s, b"Hello World!"),
+                Slipmux::Configuration(config) => assert_eq!(config, b"Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -506,7 +506,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
+                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -544,7 +544,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
+                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -607,8 +607,8 @@ mod tests {
         for results in results_arr {
             for slipframe in results {
                 match slipframe {
-                    Ok(Slipmux::Diagnostic(s)) => {
-                        assert_eq!(s, "Hello World!");
+                    Ok(Slipmux::Diagnostic(str)) => {
+                        assert_eq!(str, "Hello World!");
                     }
                     Ok(Slipmux::Configuration(_conf)) => {
                         // Do stuff
@@ -695,13 +695,13 @@ mod tests {
             assert_eq!(results.len(), 2);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
+                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
                 _ => unreachable!(),
             }
             let frame = results.pop().unwrap();
             match frame {
                 Ok(_) => unreachable!(),
-                Err(e) => assert!(matches!(e, Error::Abort)),
+                Err(error) => assert!(matches!(error, Error::Abort)),
             }
         }
     }

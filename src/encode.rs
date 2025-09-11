@@ -46,9 +46,9 @@ pub fn encode_buffered(input: Slipmux) -> Vec<u8> {
     }
     let mut buffer: Vec<u8> = vec![];
     let length = match input {
-        Slipmux::Diagnostic(s) => {
-            buffer.resize(space_requirement(s.len()), 0);
-            encode(FrameType::Diagnostic, s.as_bytes(), &mut buffer)
+        Slipmux::Diagnostic(str) => {
+            buffer.resize(space_requirement(str.len()), 0);
+            encode(FrameType::Diagnostic, str.as_bytes(), &mut buffer)
         }
         Slipmux::Configuration(conf) => {
             const CHECKSUM_BYTES: usize = 2;
