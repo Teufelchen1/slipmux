@@ -91,7 +91,6 @@ pub struct ChunkedEncoder<'input> {
 
 #[derive(Copy, Clone, PartialEq)]
 enum EncoderStage {
-    EncodeStart,
     EncodeHeader,
     EncodeData,
     EncodeFcs1,
@@ -119,7 +118,7 @@ impl<'input> ChunkedEncoder<'input> {
             ftype,
             data,
             fcs,
-            stage: EncoderStage::EncodeStart,
+            stage: EncoderStage::EncodeHeader,
             slip: Some(Encoder::new()),
         }
     }
@@ -138,8 +137,12 @@ impl<'input> ChunkedEncoder<'input> {
     ///
     /// Panics if `out` is less than 2 byte (the maximum encoded length of the minimum progress
     /// this can make).
-    // Note that none of the unwrap()s here can actually panic, due to the constant precondition of
-    // 2 bytes being available.
+    // Note that none of the unwrap()s here can actually panic: encode() will happily not make
+    // progress except for
+    // * NoOutputSpaceForHeader: that is covered by the initial minimal size,
+    //   as the header will always be encoded at the start of a (in particular, the first) chunk
+    // * finish running out of space (NoOutputSpaceForEndByte): there is an explicit break
+    //   condition.
     pub fn encode_chunk(&mut self, mut buffer: &mut [u8]) -> usize {
         assert!(buffer.len() >= 2, "Chunk too short for minimal progress.");
 
@@ -149,18 +152,11 @@ impl<'input> ChunkedEncoder<'input> {
             return 0;
         };
 
-        // We *might* also make progress when there's just 1 byte left, but that'd be hard to
-        // assess beforehand, and .
-        while buffer.len() >= 2 || (self.stage == EncoderStage::EncodeEnd && !buffer.is_empty()) {
+        loop {
             let (written, new_stage) = match self.stage {
-                EncoderStage::EncodeStart => {
-                    // Produces end-of-frame
-                    (
-                        slip.encode(&[], buffer).unwrap().written,
-                        EncoderStage::EncodeHeader,
-                    )
-                }
                 EncoderStage::EncodeHeader => (
+                    // None of those are escapeable, so they always fit in a 2-long buffer from the
+                    // start along with the End-Of-Frame marker.
                     match self.ftype {
                         FrameType::Diagnostic => {
                             slip.encode(&[Constants::DIAGNOSTIC], buffer)
@@ -172,45 +168,54 @@ impl<'input> ChunkedEncoder<'input> {
                                 .unwrap()
                                 .written
                         }
-                        _ => 0,
+                        FrameType::Ip => slip.encode(&[], buffer).unwrap().written,
                     },
                     EncoderStage::EncodeData,
                 ),
                 EncoderStage::EncodeData => {
-                    let encoded = slip.encode(self.data, buffer).unwrap();
-                    self.data = &self.data[encoded.read..];
-                    (
-                        encoded.written,
-                        if self.data.is_empty() {
-                            if matches!(self.ftype, FrameType::Configuration) {
-                                EncoderStage::EncodeFcs1
-                            } else {
-                                EncoderStage::EncodeEnd
-                            }
-                        } else {
-                            EncoderStage::EncodeData
-                        },
-                    )
+                    if self.data.is_empty() {
+                        match self.ftype {
+                            FrameType::Configuration => (0, EncoderStage::EncodeFcs1),
+                            _ => (0, EncoderStage::EncodeEnd),
+                        }
+                    } else {
+                        let encoded = slip.encode(self.data, buffer).unwrap();
+                        self.data = &self.data[encoded.read..];
+                        (encoded.written, EncoderStage::EncodeData)
+                    }
                 }
-                EncoderStage::EncodeFcs1 => (
-                    slip.encode(&self.fcs.to_le_bytes()[0..1], buffer)
-                        .unwrap()
-                        .written,
-                    EncoderStage::EncodeFcs2,
-                ),
-                EncoderStage::EncodeFcs2 => (
-                    slip.encode(&self.fcs.to_le_bytes()[1..2], buffer)
-                        .unwrap()
-                        .written,
-                    EncoderStage::EncodeEnd,
-                ),
+                EncoderStage::EncodeFcs1 => {
+                    let encoded = slip.encode(&self.fcs.to_le_bytes()[0..1], buffer).unwrap();
+                    if encoded.written == 0 {
+                        (0, EncoderStage::EncodeFcs1)
+                    } else {
+                        (encoded.written, EncoderStage::EncodeFcs2)
+                    }
+                }
+                EncoderStage::EncodeFcs2 => {
+                    let encoded = slip.encode(&self.fcs.to_le_bytes()[1..2], buffer).unwrap();
+                    if encoded.written == 0 {
+                        (0, EncoderStage::EncodeFcs1)
+                    } else {
+                        (encoded.written, EncoderStage::EncodeEnd)
+                    }
+                }
                 EncoderStage::EncodeEnd => {
-                    let encoded = slip.finish(buffer).unwrap();
-                    // Not advancing data; we won't get around to reading it any more anyway
-                    // FIXME can we leave the loop sensibly here to reuse the trailing logic?
-                    return buffer_len_initial - buffer.len() + encoded.written;
+                    if buffer.is_empty() {
+                        (0, EncoderStage::EncodeEnd)
+                    } else {
+                        let encoded = slip.finish(buffer).unwrap();
+                        // Not advancing data; we won't get around to reading it any more anyway
+                        // FIXME can we leave the loop sensibly here to reuse the trailing logic?
+                        return buffer_len_initial - buffer.len() + encoded.written;
+                    }
                 }
             };
+
+            if written == 0 && new_stage == self.stage {
+                // No progress made
+                break;
+            }
 
             self.stage = new_stage;
             buffer = &mut buffer[written..];
