@@ -304,6 +304,54 @@ mod tests {
         );
     }
 
+    fn chunked<const N: usize>() {
+        extern crate alloc;
+        use alloc::vec::Vec;
+        const DATA: &str = "Hello World!";
+
+        let mut encoder = ChunkedEncoder::new(FrameType::Diagnostic, DATA.as_bytes());
+        let mut output = Vec::new();
+        while !encoder.is_exhausted() {
+            let mut buf = [0, 0];
+            let length = encoder.encode_chunk(&mut buf);
+            output.extend_from_slice(&buf[..length]);
+        }
+        assert_eq!(output, *b"\xc0\x0aHello World!\xc0");
+
+        let packet: &[u8] = &Packet::new().to_bytes().unwrap();
+        let mut encoder = ChunkedEncoder::new(FrameType::Configuration, packet);
+        let mut output = Vec::new();
+        while !encoder.is_exhausted() {
+            let mut buf = [0, 0];
+            let length = encoder.encode_chunk(&mut buf);
+            output.extend_from_slice(&buf[..length]);
+        }
+        assert_eq!(
+            output,
+            [
+                Constants::END,
+                Constants::CONFIGURATION,
+                0x40,
+                0x01,
+                0x00,
+                0x00,
+                0xbc,
+                0x38,
+                Constants::END
+            ]
+        );
+    }
+
+    #[test]
+    fn chunked_2() {
+        chunked::<2>();
+    }
+
+    #[test]
+    fn chunked_3() {
+        chunked::<3>();
+    }
+
     #[test]
     #[cfg(feature = "std")]
     fn direct_std() {
