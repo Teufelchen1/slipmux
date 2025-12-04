@@ -5,7 +5,6 @@ use crate::Slipmux;
 use crate::checksum::CONF_FCS16;
 use crate::checksum::fcs16_finish;
 use crate::checksum::fcs16_part;
-use serial_line_ip::EncodeTotals;
 use serial_line_ip::Encoder;
 
 /// Short hand for `encode(FrameType::Diagnostic, text.as_bytes(), buffer)`
@@ -141,13 +140,10 @@ impl<'input> ChunkedEncoder<'input> {
     /// this can make).
     // Note that none of the unwrap()s here can actually panic, due to the constant precondition of
     // 2 bytes being available.
-    pub fn encode_chunk(&mut self, buffer: &mut [u8]) -> usize {
+    pub fn encode_chunk(&mut self, mut buffer: &mut [u8]) -> usize {
         assert!(buffer.len() >= 2, "Chunk too short for minimal progress.");
 
-        let mut totals = EncodeTotals {
-            read: 0,
-            written: 0,
-        };
+        let buffer_len_initial = buffer.len();
 
         let Some(mut slip) = self.slip.take() else {
             return 0;
@@ -155,72 +151,73 @@ impl<'input> ChunkedEncoder<'input> {
 
         // We *might* also make progress when there's just 1 byte left, but that'd be hard to
         // assess beforehand, and .
-        while buffer.len() - totals.written >= 2
-            || (self.stage == EncoderStage::EncodeEnd && buffer.len() - totals.written >= 1)
-        {
-            self.stage = match self.stage {
+        while buffer.len() >= 2 || (self.stage == EncoderStage::EncodeEnd && !buffer.is_empty()) {
+            let (written, new_stage) = match self.stage {
                 EncoderStage::EncodeStart => {
                     // Produces end-of-frame
-                    totals.written += slip.encode(&[], buffer).unwrap().written;
-                    EncoderStage::EncodeHeader
+                    (
+                        slip.encode(&[], buffer).unwrap().written,
+                        EncoderStage::EncodeHeader,
+                    )
                 }
-                EncoderStage::EncodeHeader => {
+                EncoderStage::EncodeHeader => (
                     match self.ftype {
                         FrameType::Diagnostic => {
-                            totals.written += slip
-                                .encode(&[Constants::DIAGNOSTIC], &mut buffer[totals.written..])
+                            slip.encode(&[Constants::DIAGNOSTIC], buffer)
                                 .unwrap()
-                                .written;
+                                .written
                         }
                         FrameType::Configuration => {
-                            totals.written += slip
-                                .encode(&[Constants::CONFIGURATION], &mut buffer[totals.written..])
+                            slip.encode(&[Constants::CONFIGURATION], buffer)
                                 .unwrap()
-                                .written;
+                                .written
                         }
-                        _ => (),
-                    }
-                    EncoderStage::EncodeData
-                }
+                        _ => 0,
+                    },
+                    EncoderStage::EncodeData,
+                ),
                 EncoderStage::EncodeData => {
-                    totals += slip
-                        .encode(self.data, &mut buffer[totals.written..])
-                        .unwrap();
-                    if totals.read == self.data.len() {
-                        if matches!(self.ftype, FrameType::Configuration) {
-                            EncoderStage::EncodeFcs1
+                    let encoded = slip.encode(self.data, buffer).unwrap();
+                    self.data = &self.data[encoded.read..];
+                    (
+                        encoded.written,
+                        if self.data.is_empty() {
+                            if matches!(self.ftype, FrameType::Configuration) {
+                                EncoderStage::EncodeFcs1
+                            } else {
+                                EncoderStage::EncodeEnd
+                            }
                         } else {
-                            EncoderStage::EncodeEnd
-                        }
-                    } else {
-                        EncoderStage::EncodeData
-                    }
+                            EncoderStage::EncodeData
+                        },
+                    )
                 }
-                EncoderStage::EncodeFcs1 => {
-                    totals.written += slip
-                        .encode(&self.fcs.to_le_bytes()[0..1], &mut buffer[totals.written..])
+                EncoderStage::EncodeFcs1 => (
+                    slip.encode(&self.fcs.to_le_bytes()[0..1], buffer)
                         .unwrap()
-                        .written;
-                    EncoderStage::EncodeFcs2
-                }
-                EncoderStage::EncodeFcs2 => {
-                    totals.written += slip
-                        .encode(&self.fcs.to_le_bytes()[1..2], &mut buffer[totals.written..])
+                        .written,
+                    EncoderStage::EncodeFcs2,
+                ),
+                EncoderStage::EncodeFcs2 => (
+                    slip.encode(&self.fcs.to_le_bytes()[1..2], buffer)
                         .unwrap()
-                        .written;
-                    EncoderStage::EncodeEnd
-                }
+                        .written,
+                    EncoderStage::EncodeEnd,
+                ),
                 EncoderStage::EncodeEnd => {
-                    totals.written += slip.finish(&mut buffer[totals.written..]).unwrap().written;
+                    let encoded = slip.finish(buffer).unwrap();
                     // Not advancing data; we won't get around to reading it any more anyway
-                    return totals.written;
+                    // FIXME can we leave the loop sensibly here to reuse the trailing logic?
+                    return buffer_len_initial - buffer.len() + encoded.written;
                 }
-            }
+            };
+
+            self.stage = new_stage;
+            buffer = &mut buffer[written..];
         }
         self.slip = Some(slip);
 
-        self.data = &self.data[totals.read..];
-        totals.written
+        buffer_len_initial - buffer.len()
     }
 
     /// Returns true iff [`Self::encode_chunk`] would return 0.
