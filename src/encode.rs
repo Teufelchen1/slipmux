@@ -72,31 +72,166 @@ pub fn encode_buffered(input: Slipmux) -> Vec<u8> {
 /// Will panic if the encoded input does not fit into the buffer
 #[must_use]
 pub fn encode(ftype: FrameType, data: &[u8], buffer: &mut [u8]) -> usize {
-    let mut slip = Encoder::new();
-    let mut totals = EncodeTotals {
-        read: 0,
-        written: 0,
-    };
-    match ftype {
-        FrameType::Diagnostic => {
-            totals += slip.encode(&[Constants::DIAGNOSTIC], buffer).unwrap();
-            totals += slip.encode(data, &mut buffer[totals.written..]).unwrap();
-        }
-        FrameType::Configuration => {
+    let mut encoder = ChunkedEncoder::new(ftype, data);
+    let size = encoder.encode_chunk(buffer);
+    assert!(encoder.is_exhausted(), "Output buffer was too small");
+    size
+}
+
+/// Encoder for a frame.
+///
+/// This item keeps the state of an encoding progress when encoding into a small buffer, e.g. a
+/// UART output buffer, which might be reused as soon as some data is flushed out.
+pub struct ChunkedEncoder<'input> {
+    ftype: FrameType,
+    data: &'input [u8],
+    stage: EncoderStage,
+    fcs: u16,
+    slip: Option<Encoder>,
+}
+
+#[derive(Copy, Clone, PartialEq)]
+enum EncoderStage {
+    EncodeStart,
+    EncodeHeader,
+    EncodeData,
+    EncodeFcs1,
+    EncodeFcs2,
+    EncodeEnd,
+    // Done has no extra stage: Once done, the .slip Encoder is gone.
+}
+
+impl<'input> ChunkedEncoder<'input> {
+    /// Creates a new chunked encoder.
+    ///
+    /// This will encode the data based on the `FrameType` over any number of calls to
+    /// [`Self::encode_chunk()`] into a buffer provided there.
+    #[must_use]
+    pub fn new(ftype: FrameType, data: &'input [u8]) -> Self {
+        let fcs = if matches!(ftype, FrameType::Configuration) {
             let fcs = fcs16_part(CONF_FCS16, data);
-            let fcs = fcs16_finish(fcs);
-            totals += slip.encode(&[Constants::CONFIGURATION], buffer).unwrap();
-            totals += slip.encode(data, &mut buffer[totals.written..]).unwrap();
-            totals += slip
-                .encode(&fcs.to_le_bytes(), &mut buffer[totals.written..])
-                .unwrap();
-        }
-        FrameType::Ip => {
-            totals += slip.encode(data, &mut buffer[totals.written..]).unwrap();
+            fcs16_finish(fcs)
+        } else {
+            // Will not be used
+            0
+        };
+
+        Self {
+            ftype,
+            data,
+            fcs,
+            stage: EncoderStage::EncodeStart,
+            slip: Some(Encoder::new()),
         }
     }
-    totals += slip.finish(&mut buffer[totals.written..]).unwrap();
-    totals.written
+
+    /// Writes some of the data into the output buffer.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// Unlike many other write-style methods, this does *not* fill up the buffer to the last byte
+    /// except for the last block; this simplifies encoding escaped bytes.
+    ///
+    /// Call this function on some buffer until it returns 0 (in which case all of its content is
+    /// serialized).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `out` is less than 2 byte (the maximum encoded length of the minimum progress
+    /// this can make).
+    // Note that none of the unwrap()s here can actually panic, due to the constant precondition of
+    // 2 bytes being available.
+    pub fn encode_chunk(&mut self, buffer: &mut [u8]) -> usize {
+        assert!(buffer.len() >= 2, "Chunk too short for minimal progress.");
+
+        let mut totals = EncodeTotals {
+            read: 0,
+            written: 0,
+        };
+
+        let Some(mut slip) = self.slip.take() else {
+            return 0;
+        };
+
+        // We *might* also make progress when there's just 1 byte left, but that'd be hard to
+        // assess beforehand, and .
+        while buffer.len() - totals.written >= 2
+            || (self.stage == EncoderStage::EncodeEnd && buffer.len() - totals.written >= 1)
+        {
+            self.stage = match self.stage {
+                EncoderStage::EncodeStart => {
+                    // Produces end-of-frame
+                    totals.written += slip.encode(&[], buffer).unwrap().written;
+                    EncoderStage::EncodeHeader
+                }
+                EncoderStage::EncodeHeader => {
+                    match self.ftype {
+                        FrameType::Diagnostic => {
+                            totals.written += slip
+                                .encode(&[Constants::DIAGNOSTIC], &mut buffer[totals.written..])
+                                .unwrap()
+                                .written;
+                        }
+                        FrameType::Configuration => {
+                            totals.written += slip
+                                .encode(&[Constants::CONFIGURATION], &mut buffer[totals.written..])
+                                .unwrap()
+                                .written;
+                        }
+                        _ => (),
+                    }
+                    EncoderStage::EncodeData
+                }
+                EncoderStage::EncodeData => {
+                    totals += slip
+                        .encode(self.data, &mut buffer[totals.written..])
+                        .unwrap();
+                    if totals.read == self.data.len() {
+                        if matches!(self.ftype, FrameType::Configuration) {
+                            EncoderStage::EncodeFcs1
+                        } else {
+                            EncoderStage::EncodeEnd
+                        }
+                    } else {
+                        EncoderStage::EncodeData
+                    }
+                }
+                EncoderStage::EncodeFcs1 => {
+                    totals.written += slip
+                        .encode(&self.fcs.to_le_bytes()[0..1], &mut buffer[totals.written..])
+                        .unwrap()
+                        .written;
+                    EncoderStage::EncodeFcs2
+                }
+                EncoderStage::EncodeFcs2 => {
+                    totals.written += slip
+                        .encode(&self.fcs.to_le_bytes()[1..2], &mut buffer[totals.written..])
+                        .unwrap()
+                        .written;
+                    EncoderStage::EncodeEnd
+                }
+                EncoderStage::EncodeEnd => {
+                    totals.written += slip.finish(&mut buffer[totals.written..]).unwrap().written;
+                    // Not advancing data; we won't get around to reading it any more anyway
+                    return totals.written;
+                }
+            }
+        }
+        self.slip = Some(slip);
+
+        self.data = &self.data[totals.read..];
+        totals.written
+    }
+
+    /// Returns true iff [`Self::encode_chunk`] would return 0.
+    #[must_use]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "no point in this for runtime state"
+    )]
+    pub fn is_exhausted(&self) -> bool {
+        self.slip.is_none()
+    }
 }
 
 #[cfg(test)]
