@@ -82,21 +82,12 @@ pub fn encode(ftype: FrameType, data: &[u8], buffer: &mut [u8]) -> usize {
 /// This item keeps the state of an encoding progress when encoding into a small buffer, e.g. a
 /// UART output buffer, which might be reused as soon as some data is flushed out.
 pub struct ChunkedEncoder<'input> {
-    ftype: FrameType,
+    header: &'static [u8],
     data: &'input [u8],
-    stage: EncoderStage,
-    fcs: u16,
+    // Note that this is often initialized to 2 to not serialize any FCS
+    fcs_cursor: u8,
+    fcs: [u8; 2],
     slip: Option<Encoder>,
-}
-
-#[derive(Copy, Clone, PartialEq)]
-enum EncoderStage {
-    EncodeHeader,
-    EncodeData,
-    EncodeFcs1,
-    EncodeFcs2,
-    EncodeEnd,
-    // Done has no extra stage: Once done, the .slip Encoder is gone.
 }
 
 impl<'input> ChunkedEncoder<'input> {
@@ -106,20 +97,51 @@ impl<'input> ChunkedEncoder<'input> {
     /// [`Self::encode_chunk()`] into a buffer provided there.
     #[must_use]
     pub fn new(ftype: FrameType, data: &'input [u8]) -> Self {
-        let fcs = if matches!(ftype, FrameType::Configuration) {
+        let header: &[u8] = match ftype {
+            FrameType::Diagnostic => &[Constants::DIAGNOSTIC],
+            FrameType::Configuration => &[Constants::CONFIGURATION],
+            FrameType::Ip => &[],
+        };
+
+        let (fcs, fcs_cursor) = if matches!(ftype, FrameType::Configuration) {
             let fcs = fcs16_part(CONF_FCS16, data);
-            fcs16_finish(fcs)
+            (fcs16_finish(fcs).to_le_bytes(), 0)
         } else {
-            // Will not be used
-            0
+            ([0, 0], 2)
         };
 
         Self {
-            ftype,
+            header,
             data,
+            fcs_cursor,
             fcs,
-            stage: EncoderStage::EncodeHeader,
             slip: Some(Encoder::new()),
+        }
+    }
+
+    /// Non-empty next piece of data that should be encoded, or None if all data has been encoded
+    /// (but probably not the End marker).
+    fn slice_to_encode(&self) -> Option<&[u8]> {
+        if !self.header.is_empty() {
+            Some(self.header)
+        } else if !self.data.is_empty() {
+            Some(self.data)
+        } else if (self.fcs_cursor as usize) < self.fcs.len() {
+            Some(&self.fcs[self.fcs_cursor as usize..])
+        } else {
+            None
+        }
+    }
+
+    /// Advance whichever slice was just selected in [`Self::slice_to_encode()`] by some amount of
+    /// bytes.
+    fn advance_slice(&mut self, amount: usize) {
+        if !self.header.is_empty() {
+            self.header = &self.header[amount..];
+        } else if !self.data.is_empty() {
+            self.data = &self.data[amount..];
+        } else {
+            self.fcs_cursor += amount as u8;
         }
     }
 
@@ -137,13 +159,11 @@ impl<'input> ChunkedEncoder<'input> {
     ///
     /// Panics if `out` is less than 2 byte (the maximum encoded length of the minimum progress
     /// this can make).
-    // Note that none of the unwrap()s here can actually panic: encode() will happily not make
-    // progress except for
-    // * NoOutputSpaceForHeader: that is covered by the initial minimal size,
-    //   as the header will always be encoded at the start of a (in particular, the first) chunk
-    // * finish running out of space (NoOutputSpaceForEndByte): there is an explicit break
-    //   condition.
     pub fn encode_chunk(&mut self, mut buffer: &mut [u8]) -> usize {
+        // We might get over small buffers in some situations, but things would break on generic
+        // data. If a user calculates the buffer precisely to the maximum needs, there would be a
+        // case for tolerating len 1 when only the End marker is left, but then, if a user has a
+        // precisely calculated buffer, they can populated it right away in full.
         assert!(buffer.len() >= 2, "Chunk too short for minimal progress.");
 
         let buffer_len_initial = buffer.len();
@@ -153,72 +173,31 @@ impl<'input> ChunkedEncoder<'input> {
         };
 
         loop {
-            let (written, new_stage) = match self.stage {
-                EncoderStage::EncodeHeader => (
-                    // None of those are escapeable, so they always fit in a 2-long buffer from the
-                    // start along with the End-Of-Frame marker.
-                    match self.ftype {
-                        FrameType::Diagnostic => {
-                            slip.encode(&[Constants::DIAGNOSTIC], buffer)
-                                .unwrap()
-                                .written
-                        }
-                        FrameType::Configuration => {
-                            slip.encode(&[Constants::CONFIGURATION], buffer)
-                                .unwrap()
-                                .written
-                        }
-                        FrameType::Ip => slip.encode(&[], buffer).unwrap().written,
-                    },
-                    EncoderStage::EncodeData,
-                ),
-                EncoderStage::EncodeData => {
-                    if self.data.is_empty() {
-                        match self.ftype {
-                            FrameType::Configuration => (0, EncoderStage::EncodeFcs1),
-                            _ => (0, EncoderStage::EncodeEnd),
-                        }
-                    } else {
-                        let encoded = slip.encode(self.data, buffer).unwrap();
-                        self.data = &self.data[encoded.read..];
-                        (encoded.written, EncoderStage::EncodeData)
-                    }
-                }
-                EncoderStage::EncodeFcs1 => {
-                    let encoded = slip.encode(&self.fcs.to_le_bytes()[0..1], buffer).unwrap();
-                    if encoded.written == 0 {
-                        (0, EncoderStage::EncodeFcs1)
-                    } else {
-                        (encoded.written, EncoderStage::EncodeFcs2)
-                    }
-                }
-                EncoderStage::EncodeFcs2 => {
-                    let encoded = slip.encode(&self.fcs.to_le_bytes()[1..2], buffer).unwrap();
-                    if encoded.written == 0 {
-                        (0, EncoderStage::EncodeFcs1)
-                    } else {
-                        (encoded.written, EncoderStage::EncodeEnd)
-                    }
-                }
-                EncoderStage::EncodeEnd => {
-                    if buffer.is_empty() {
-                        (0, EncoderStage::EncodeEnd)
-                    } else {
-                        let encoded = slip.finish(buffer).unwrap();
-                        // Not advancing data; we won't get around to reading it any more anyway
-                        // FIXME can we leave the loop sensibly here to reuse the trailing logic?
-                        return buffer_len_initial - buffer.len() + encoded.written;
-                    }
-                }
-            };
+            if let Some(slice) = self.slice_to_encode() {
+                let encoded = slip.encode(slice, buffer).expect(
+                    "this only fails when there is not even enough room for the start byte",
+                );
 
-            if written == 0 && new_stage == self.stage {
-                // No progress made
-                break;
+                buffer = &mut buffer[encoded.written..];
+                self.advance_slice(encoded.read);
+
+                if encoded.written == 0 {
+                    break;
+                }
+            } else {
+                #[allow(
+                    clippy::redundant_else,
+                    clippy::if_not_else,
+                    reason = "reflects logical decision tree"
+                )]
+                if !buffer.is_empty() {
+                    let encoded = slip.finish(buffer).expect("buffer was checked explictly");
+                    // FIXME can we leave the loop sensibly here to reuse the trailing logic?
+                    return buffer_len_initial - buffer.len() + encoded.written;
+                } else {
+                    break;
+                }
             }
-
-            self.stage = new_stage;
-            buffer = &mut buffer[written..];
         }
         self.slip = Some(slip);
 
