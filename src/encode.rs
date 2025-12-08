@@ -296,7 +296,7 @@ mod tests {
         let mut encoder = ChunkedEncoder::new(FrameType::Diagnostic, DATA.as_bytes());
         let mut output = Vec::new();
         while !encoder.is_exhausted() {
-            let mut buf = [0, 0];
+            let mut buf = [0; N];
             let length = encoder.encode_chunk(&mut buf);
             output.extend_from_slice(&buf[..length]);
         }
