@@ -404,7 +404,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
+                Slipmux::Diagnostic(message) => assert_eq!(message, "Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -506,7 +506,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
+                Slipmux::Diagnostic(message) => assert_eq!(message, "Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -544,7 +544,7 @@ mod tests {
             assert_eq!(results.len(), 1);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
+                Slipmux::Diagnostic(message) => assert_eq!(message, "Hello World!"),
                 _ => unreachable!(),
             }
         }
@@ -607,8 +607,8 @@ mod tests {
         for results in results_arr {
             for slipframe in results {
                 match slipframe {
-                    Ok(Slipmux::Diagnostic(str)) => {
-                        assert_eq!(str, "Hello World!");
+                    Ok(Slipmux::Diagnostic(message)) => {
+                        assert_eq!(message, "Hello World!");
                     }
                     Ok(Slipmux::Configuration(_conf)) => {
                         // Do stuff
@@ -695,7 +695,7 @@ mod tests {
             assert_eq!(results.len(), 2);
             let frame = results.pop().unwrap();
             match frame.unwrap() {
-                Slipmux::Diagnostic(str) => assert_eq!(str, "Hello World!"),
+                Slipmux::Diagnostic(message) => assert_eq!(message, "Hello World!"),
                 _ => unreachable!(),
             }
             let frame = results.pop().unwrap();
