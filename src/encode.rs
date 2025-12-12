@@ -185,7 +185,7 @@ impl<'input> ChunkedEncoder<'input> {
                     break;
                 }
             } else {
-                #[allow(
+                #[expect(
                     clippy::redundant_else,
                     clippy::if_not_else,
                     reason = "reflects logical decision tree"
