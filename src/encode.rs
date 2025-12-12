@@ -45,9 +45,9 @@ pub fn encode_buffered(input: Slipmux) -> Vec<u8> {
     }
     let mut buffer: Vec<u8> = vec![];
     let length = match input {
-        Slipmux::Diagnostic(s) => {
-            buffer.resize(space_requirement(s.len()), 0);
-            encode(FrameType::Diagnostic, s.as_bytes(), &mut buffer)
+        Slipmux::Diagnostic(message) => {
+            buffer.resize(space_requirement(message.len()), 0);
+            encode(FrameType::Diagnostic, message.as_bytes(), &mut buffer)
         }
         Slipmux::Configuration(conf) => {
             const CHECKSUM_BYTES: usize = 2;
@@ -135,6 +135,7 @@ impl<'input> ChunkedEncoder<'input> {
 
     /// Advance whichever slice was just selected in [`Self::slice_to_encode()`] by some amount of
     /// bytes.
+    #[expect(clippy::cast_possible_truncation)] // TODO: should this be fixed?
     fn advance_slice(&mut self, amount: usize) {
         if !self.header.is_empty() {
             self.header = &self.header[amount..];
@@ -185,7 +186,7 @@ impl<'input> ChunkedEncoder<'input> {
                     break;
                 }
             } else {
-                #[allow(
+                #[expect(
                     clippy::redundant_else,
                     clippy::if_not_else,
                     reason = "reflects logical decision tree"
