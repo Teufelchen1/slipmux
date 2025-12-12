@@ -5,7 +5,6 @@ use crate::Slipmux;
 use crate::checksum::CONF_FCS16;
 use crate::checksum::fcs16_finish;
 use crate::checksum::fcs16_part;
-use serial_line_ip::EncodeTotals;
 use serial_line_ip::Encoder;
 
 /// Short hand for `encode(FrameType::Diagnostic, text.as_bytes(), buffer)`
@@ -72,31 +71,148 @@ pub fn encode_buffered(input: Slipmux) -> Vec<u8> {
 /// Will panic if the encoded input does not fit into the buffer
 #[must_use]
 pub fn encode(ftype: FrameType, data: &[u8], buffer: &mut [u8]) -> usize {
-    let mut slip = Encoder::new();
-    let mut totals = EncodeTotals {
-        read: 0,
-        written: 0,
-    };
-    match ftype {
-        FrameType::Diagnostic => {
-            totals += slip.encode(&[Constants::DIAGNOSTIC], buffer).unwrap();
-            totals += slip.encode(data, &mut buffer[totals.written..]).unwrap();
-        }
-        FrameType::Configuration => {
+    let mut encoder = ChunkedEncoder::new(ftype, data);
+    let size = encoder.encode_chunk(buffer);
+    assert!(encoder.is_exhausted(), "Output buffer was too small");
+    size
+}
+
+/// Encoder for a frame.
+///
+/// This item keeps the state of an encoding progress when encoding into a small buffer, e.g. a
+/// UART output buffer, which might be reused as soon as some data is flushed out.
+pub struct ChunkedEncoder<'input> {
+    header: &'static [u8],
+    data: &'input [u8],
+    // Note that this is often initialized to 2 to not serialize any FCS
+    fcs_cursor: u8,
+    fcs: [u8; 2],
+    slip: Option<Encoder>,
+}
+
+impl<'input> ChunkedEncoder<'input> {
+    /// Creates a new chunked encoder.
+    ///
+    /// This will encode the data based on the `FrameType` over any number of calls to
+    /// [`Self::encode_chunk()`] into a buffer provided there.
+    #[must_use]
+    pub fn new(ftype: FrameType, data: &'input [u8]) -> Self {
+        let header: &[u8] = match ftype {
+            FrameType::Diagnostic => &[Constants::DIAGNOSTIC],
+            FrameType::Configuration => &[Constants::CONFIGURATION],
+            FrameType::Ip => &[],
+        };
+
+        let (fcs, fcs_cursor) = if matches!(ftype, FrameType::Configuration) {
             let fcs = fcs16_part(CONF_FCS16, data);
-            let fcs = fcs16_finish(fcs);
-            totals += slip.encode(&[Constants::CONFIGURATION], buffer).unwrap();
-            totals += slip.encode(data, &mut buffer[totals.written..]).unwrap();
-            totals += slip
-                .encode(&fcs.to_le_bytes(), &mut buffer[totals.written..])
-                .unwrap();
-        }
-        FrameType::Ip => {
-            totals += slip.encode(data, &mut buffer[totals.written..]).unwrap();
+            (fcs16_finish(fcs).to_le_bytes(), 0)
+        } else {
+            ([0, 0], 2)
+        };
+
+        Self {
+            header,
+            data,
+            fcs_cursor,
+            fcs,
+            slip: Some(Encoder::new()),
         }
     }
-    totals += slip.finish(&mut buffer[totals.written..]).unwrap();
-    totals.written
+
+    /// Non-empty next piece of data that should be encoded, or None if all data has been encoded
+    /// (but probably not the End marker).
+    fn slice_to_encode(&self) -> Option<&[u8]> {
+        if !self.header.is_empty() {
+            Some(self.header)
+        } else if !self.data.is_empty() {
+            Some(self.data)
+        } else if (self.fcs_cursor as usize) < self.fcs.len() {
+            Some(&self.fcs[self.fcs_cursor as usize..])
+        } else {
+            None
+        }
+    }
+
+    /// Advance whichever slice was just selected in [`Self::slice_to_encode()`] by some amount of
+    /// bytes.
+    fn advance_slice(&mut self, amount: usize) {
+        if !self.header.is_empty() {
+            self.header = &self.header[amount..];
+        } else if !self.data.is_empty() {
+            self.data = &self.data[amount..];
+        } else {
+            self.fcs_cursor += amount as u8;
+        }
+    }
+
+    /// Writes some of the data into the output buffer.
+    ///
+    /// Returns the number of bytes written.
+    ///
+    /// Unlike many other write-style methods, this does *not* fill up the buffer to the last byte
+    /// except for the last block; this simplifies encoding escaped bytes.
+    ///
+    /// Call this function on some buffer until it returns 0 (in which case all of its content is
+    /// serialized).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `out` is less than 2 byte (the maximum encoded length of the minimum progress
+    /// this can make).
+    pub fn encode_chunk(&mut self, mut buffer: &mut [u8]) -> usize {
+        // We might get over small buffers in some situations, but things would break on generic
+        // data. If a user calculates the buffer precisely to the maximum needs, there would be a
+        // case for tolerating len 1 when only the End marker is left, but then, if a user has a
+        // precisely calculated buffer, they can populated it right away in full.
+        assert!(buffer.len() >= 2, "Chunk too short for minimal progress.");
+
+        let buffer_len_initial = buffer.len();
+
+        let Some(mut slip) = self.slip.take() else {
+            return 0;
+        };
+
+        loop {
+            if let Some(slice) = self.slice_to_encode() {
+                let encoded = slip.encode(slice, buffer).expect(
+                    "this only fails when there is not even enough room for the start byte",
+                );
+
+                buffer = &mut buffer[encoded.written..];
+                self.advance_slice(encoded.read);
+
+                if encoded.written == 0 {
+                    break;
+                }
+            } else {
+                #[allow(
+                    clippy::redundant_else,
+                    clippy::if_not_else,
+                    reason = "reflects logical decision tree"
+                )]
+                if !buffer.is_empty() {
+                    let encoded = slip.finish(buffer).expect("buffer was checked explictly");
+                    // FIXME can we leave the loop sensibly here to reuse the trailing logic?
+                    return buffer_len_initial - buffer.len() + encoded.written;
+                } else {
+                    break;
+                }
+            }
+        }
+        self.slip = Some(slip);
+
+        buffer_len_initial - buffer.len()
+    }
+
+    /// Returns true iff [`Self::encode_chunk`] would return 0.
+    #[must_use]
+    #[expect(
+        clippy::missing_const_for_fn,
+        reason = "no point in this for runtime state"
+    )]
+    pub fn is_exhausted(&self) -> bool {
+        self.slip.is_none()
+    }
 }
 
 #[cfg(test)]
@@ -170,6 +286,54 @@ mod tests {
                 Constants::END
             ]
         );
+    }
+
+    fn chunked<const N: usize>() {
+        extern crate alloc;
+        use alloc::vec::Vec;
+        const DATA: &str = "Hello World!";
+
+        let mut encoder = ChunkedEncoder::new(FrameType::Diagnostic, DATA.as_bytes());
+        let mut output = Vec::new();
+        while !encoder.is_exhausted() {
+            let mut buf = [0; N];
+            let length = encoder.encode_chunk(&mut buf);
+            output.extend_from_slice(&buf[..length]);
+        }
+        assert_eq!(output, *b"\xc0\x0aHello World!\xc0");
+
+        let packet: &[u8] = &Packet::new().to_bytes().unwrap();
+        let mut encoder = ChunkedEncoder::new(FrameType::Configuration, packet);
+        let mut output = Vec::new();
+        while !encoder.is_exhausted() {
+            let mut buf = [0, 0];
+            let length = encoder.encode_chunk(&mut buf);
+            output.extend_from_slice(&buf[..length]);
+        }
+        assert_eq!(
+            output,
+            [
+                Constants::END,
+                Constants::CONFIGURATION,
+                0x40,
+                0x01,
+                0x00,
+                0x00,
+                0xbc,
+                0x38,
+                Constants::END
+            ]
+        );
+    }
+
+    #[test]
+    fn chunked_2() {
+        chunked::<2>();
+    }
+
+    #[test]
+    fn chunked_3() {
+        chunked::<3>();
     }
 
     #[test]

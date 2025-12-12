@@ -137,6 +137,7 @@ mod decoder;
 mod encode;
 mod framehandler;
 
+pub use encode::ChunkedEncoder;
 pub use encode::encode;
 #[cfg(feature = "std")]
 pub use encode::encode_buffered;
