@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-12-24
+
 ### Added
 
 - Introduced `ChunkedEncoder` that can iteratively encode data into a (small) buffer. Inteded for use on constrained devices where the output buffer might be hardware limited, e.g. uart write buffer.
