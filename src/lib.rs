@@ -26,6 +26,7 @@
 //! [`encode_packet()`].
 //!
 //! ```
+//! use slipmux::ChunkedEncoder;
 //! use slipmux::FrameType;
 //! use slipmux::Slipmux;
 //! use slipmux::encode;
@@ -42,6 +43,16 @@
 //! let mut own_buffer: [u8; 256] = [0; 256];
 //! let length = encode(FrameType::Diagnostic, "Hello World!".as_bytes(), &mut own_buffer);
 //! assert_eq!(buffer, own_buffer[..length]);
+//!
+//! /* Also no_std, when buffer space is limited, the chunked encoder can be used iteratively */
+//! let mut encoder = ChunkedEncoder::new(FrameType::Diagnostic, "Hello World!".as_bytes());
+//! let mut output = Vec::new();
+//! while !encoder.is_exhausted() {
+//!     let mut buf = [0; 4];
+//!     let length = encoder.encode_chunk(&mut buf);
+//!     output.extend_from_slice(&buf[..length]);
+//! }
+//! assert_eq!(output, *b"\xc0\x0aHello World!\xc0");
 //!
 //! /* Example with configuration */
 //! let length = encode_configuration(&Packet::new().to_bytes().unwrap(), &mut own_buffer);
