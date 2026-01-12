@@ -272,8 +272,8 @@ mod tests {
         assert_eq!(3, frames.len());
         for slipframe in frames {
             match slipframe {
-                Ok(Slipmux::Diagnostic(s)) => {
-                    assert_eq!(s, "Hello World!");
+                Ok(Slipmux::Diagnostic(message)) => {
+                    assert_eq!(message, "Hello World!");
                 }
                 Ok(Slipmux::Configuration(conf)) => {
                     assert_eq!(conf, Packet::new().to_bytes().unwrap());
