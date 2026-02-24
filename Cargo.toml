@@ -1,10 +1,10 @@
 [package]
 authors = ["Bennet Hattesen <bennet.hattesen@haw-hamburg.de>"]
-categories = ["encoding"]
+categories = ["encoding", "no_std::no_alloc"]
 edition = "2024"
 description = "Slipmux de- and encoding"
 homepage = "https://github.com/teufelchen1/slipmux"
-keywords = ["slip", "serial", "uart", "coap", "no_std"]
+keywords = ["slip", "serial", "uart", "coap"]
 
 license = "MIT OR Apache-2.0"
 name = "slipmux"
