@@ -182,7 +182,7 @@ impl Decoder {
                 (Ip, Constants::END) => {
                     self.state = Idle;
                     handler.end_frame(None);
-                    return Ok(DecodeStatus::FrameCompleteConfiguration);
+                    return Ok(DecodeStatus::FrameCompleteIp);
                 }
                 (Ip, _) => {
                     handler.write_byte(byte);
