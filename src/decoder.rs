@@ -212,3 +212,92 @@ impl Decoder {
         Ok(DecodeStatus::Incomplete)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{OwnedLatestFrame, Slipmux, encode_buffered};
+    use std::assert_matches;
+
+    use super::*;
+
+    #[test]
+    fn decode_all_frametypes() {
+        const HELLO_WORLD: &str = "Hello World!";
+        const HELLO_CONFIG: [u8; 14] = [
+            0x64, 0x45, 0x13, 0xFD, 0xD0, 0xE2, 0x4D, 0xAC, 0xFF, 0x48, 0x65, 0x6C, 0x6C, 0x6F,
+        ];
+        const HELLO_PACKET: [u8; 6] = [0x60, 0x0d, 0xda, 0x01, 0xfe, 0x80];
+        let input_diagnostic = Slipmux::Diagnostic(HELLO_WORLD.to_owned());
+        let mut buffer = encode_buffered(input_diagnostic);
+        let input_configuration = Slipmux::Configuration(HELLO_CONFIG.to_vec());
+        buffer.append(&mut encode_buffered(input_configuration));
+        let input_packet = Slipmux::Packet(HELLO_PACKET.to_vec());
+        buffer.append(&mut encode_buffered(input_packet));
+
+        let expected: [DecodeStatus; 42] = [
+            DecodeStatus::Incomplete, // leading end
+            DecodeStatus::Incomplete, // type
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::FrameCompleteDiagnostic,
+            DecodeStatus::Incomplete, // leading end
+            DecodeStatus::Incomplete, // type
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete, // FCS
+            DecodeStatus::Incomplete, // FCS
+            DecodeStatus::FrameCompleteConfiguration,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::Incomplete,
+            DecodeStatus::FrameCompleteIp,
+        ];
+
+        let mut slipmux = Decoder::new();
+        let mut handler = OwnedLatestFrame::new();
+
+        for (index, byte) in buffer.iter().enumerate() {
+            let result: DecodeStatus = slipmux.decode(*byte, &mut handler).unwrap();
+            match expected[index] {
+                DecodeStatus::Incomplete => {
+                    assert_matches!(result, DecodeStatus::Incomplete);
+                }
+                DecodeStatus::FrameCompleteDiagnostic => {
+                    assert_matches!(result, DecodeStatus::FrameCompleteDiagnostic);
+                }
+                DecodeStatus::FrameCompleteConfiguration => {
+                    assert_matches!(result, DecodeStatus::FrameCompleteConfiguration);
+                }
+                DecodeStatus::FrameCompleteIp => {
+                    assert_matches!(result, DecodeStatus::FrameCompleteIp);
+                }
+            }
+        }
+    }
+}
