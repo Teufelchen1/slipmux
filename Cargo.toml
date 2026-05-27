@@ -1,6 +1,6 @@
 [package]
 authors = ["Bennet Hattesen <bennet.hattesen@haw-hamburg.de>"]
-categories = ["encoding", "no_std::no_alloc"]
+categories = ["encoding", "no-std::no-alloc"]
 edition = "2024"
 description = "Slipmux de- and encoding"
 homepage = "https://github.com/teufelchen1/slipmux"
@@ -10,7 +10,7 @@ license = "MIT OR Apache-2.0"
 name = "slipmux"
 readme = "README.md"
 repository = "https://github.com/teufelchen1/slipmux"
-version = "0.4.0"
+version = "0.4.1"
 
 [features]
 default = ["std"]

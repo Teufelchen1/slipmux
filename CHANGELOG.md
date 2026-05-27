@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-05-27
+
+### Fixed
+
+- The decoder would erroneous return `FrameCompleteConfiguration` when it should have returned `FrameCompleteIp`
+
 ## [0.4.0] - 2025-12-24
 
 ### Added
