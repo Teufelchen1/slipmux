@@ -216,7 +216,6 @@ impl Decoder {
 #[cfg(test)]
 mod tests {
     use crate::{OwnedLatestFrame, Slipmux, encode_buffered};
-    use std::assert_matches;
 
     use super::*;
 
@@ -286,16 +285,16 @@ mod tests {
             let result: DecodeStatus = slipmux.decode(*byte, &mut handler).unwrap();
             match expected[index] {
                 DecodeStatus::Incomplete => {
-                    assert_matches!(result, DecodeStatus::Incomplete);
+                    assert!(matches!(result, DecodeStatus::Incomplete));
                 }
                 DecodeStatus::FrameCompleteDiagnostic => {
-                    assert_matches!(result, DecodeStatus::FrameCompleteDiagnostic);
+                    assert!(matches!(result, DecodeStatus::FrameCompleteDiagnostic));
                 }
                 DecodeStatus::FrameCompleteConfiguration => {
-                    assert_matches!(result, DecodeStatus::FrameCompleteConfiguration);
+                    assert!(matches!(result, DecodeStatus::FrameCompleteConfiguration));
                 }
                 DecodeStatus::FrameCompleteIp => {
-                    assert_matches!(result, DecodeStatus::FrameCompleteIp);
+                    assert!(matches!(result, DecodeStatus::FrameCompleteIp));
                 }
             }
         }
