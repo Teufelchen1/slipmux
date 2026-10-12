@@ -300,7 +300,7 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B> {
         // That's quite verbose for `self.take_diagnostic_and_error().0`, but makes sure that the
         // compiler agress that we don't throw away information here.
         let (buffer, error) = self.take_diagnostic_and_error();
-        match error.map(|e| e.into()) {
+        match error.map(core::convert::Into::into) {
             None => (),
         }
         buffer
@@ -343,10 +343,11 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBuffe
             panic!("Called .write_byte before .begin_frame, frame_type not set.");
         };
 
-        if let Err(e) = buffer.write(&[byte]) {
-            if self.error.is_none() {
-                self.error = Some(e);
-            }
+        let written = buffer.write(&[byte]);
+        if let Err(e) = written
+            && self.error.is_none()
+        {
+            self.error = Some(e);
         }
     }
 
@@ -475,7 +476,7 @@ mod tests {
         results
     }
 
-    /// Like vec_single_buffer_wrapper, but with a heapless vec of length 10.
+    /// Like `vec_single_buffer_wrapper`, but with a heapless vec of length N.
     fn heapless_single_buffer_wrapper<const N: usize>(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
         let mut handler = SingleBufferHandler::<heapless::Vec<u8, N>>::new();
