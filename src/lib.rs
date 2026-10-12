@@ -165,6 +165,7 @@ pub use framehandler::BufferedFrameHandler;
 #[cfg(feature = "std")]
 pub use framehandler::OwnedLatestFrame;
 pub use framehandler::ReferencedLatestFrame;
+pub use framehandler::SingleBufferHandler;
 
 /// Magic byte constants used in Slipmux
 #[non_exhaustive]

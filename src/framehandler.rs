@@ -217,6 +217,145 @@ impl FrameHandler for BufferedFrameHandler {
     }
 }
 
+/// A handler that writes into some owned buffer, e.g. a `heapless::Vec`.
+pub struct SingleBufferHandler<B: embedded_io::Write + Default + AsRef<[u8]>> {
+    /// Set after a frame start, left in place even at completion to indicate the type of buffer
+    /// content.
+    frame_type: Option<FrameType>,
+    /// Spooled data of type as indicated in [`Self::frame_type`]; for Control messages, this
+    /// includes FCS.
+    buffer: Option<B>,
+    /// First error that occurred since the start of the frame.
+    ///
+    /// This does not overwrite the buffer, since acting on some kind of overrun errors can still
+    /// be useful in some cases.
+    error: Option<<B as embedded_io::ErrorType>::Error>,
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B> {
+    /// Creates a new handler
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            frame_type: None,
+            buffer: None,
+            error: None,
+        }
+    }
+
+    fn take_buffer_and_error(
+        &mut self,
+        expected_type: FrameType,
+    ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        assert!(
+            self.frame_type == Some(expected_type),
+            "Requested frame type does not match present frame."
+        );
+
+        let buffer = self.buffer.take().unwrap();
+        let error = self.error.take();
+        (buffer, error)
+    }
+
+    /// Takes the diangostic frame out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the buffer was already taken, or there was a different frame pending than a diagnostic
+    /// frame.
+    pub fn take_diagnostic_and_error(
+        &mut self,
+    ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.take_buffer_and_error(FrameType::Diagnostic)
+    }
+
+    /// Takes the configuration cluding the FCS) out of self, along with any error that
+    /// occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the buffer was already taken, or there was a different frame pending than a
+    /// configuration frame.
+    pub fn take_configuration_and_error(
+        &mut self,
+    ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.take_buffer_and_error(FrameType::Configuration)
+    }
+
+    /// Takes the IP packet out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the buffer was already taken, or there was a different frame pending than a packet
+    /// frame.
+    pub fn take_ip_and_error(&mut self) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.take_buffer_and_error(FrameType::Ip)
+    }
+
+    /// Like `take_diagnostic_and_error`, but for infallible buffers.
+    pub fn take_diagnostic(&mut self) -> B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        // That's quite verbose for `self.take_diagnostic_and_error().0`, but makes sure that the
+        // compiler agress that we don't throw away information here.
+        let (buffer, error) = self.take_diagnostic_and_error();
+        match error.map(|e| e.into()) {
+            None => (),
+        }
+        buffer
+    }
+
+    /// Like `take_configuration_and_error`, but for infallible buffers.
+    pub fn take_configuration(&mut self) -> B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.take_configuration_and_error().0
+    }
+
+    /// Like `take_ip_and_error`, but for infallible buffers.
+    pub fn take_ip(&mut self) -> B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.take_ip_and_error().0
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> Default for SingleBufferHandler<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBufferHandler<B> {
+    fn begin_frame(&mut self, frame_type: FrameType) {
+        // Not checking if the frame type is None: We'll leave that value in place after completion
+        // so that the user has time to take the value out.
+        self.frame_type = Some(frame_type);
+        self.buffer = Some(Default::default());
+        self.error = None;
+    }
+
+    fn write_byte(&mut self, byte: u8) {
+        let Some(buffer) = &mut self.buffer else {
+            panic!("Called .write_byte before .begin_frame, frame_type not set.");
+        };
+
+        if let Err(e) = buffer.write(&[byte]) {
+            if self.error.is_none() {
+                self.error = Some(e);
+            }
+        }
+    }
+
+    fn end_frame(&mut self, _: Option<Error>) {
+        // The application using this handler will know to pull something out and thus clear the
+        // buffer -- or not, and we just start over.
+    }
+}
+
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod tests {
