@@ -446,6 +446,35 @@ mod tests {
         results
     }
 
+    fn vec_single_buffer_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
+        let mut slipmux = Decoder::new();
+        let mut handler = SingleBufferHandler::<Vec<u8>>::new();
+        let mut results: Vec<Result<Slipmux, Error>> = vec![];
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    results.push(Ok(Slipmux::Diagnostic(
+                        String::from_utf8_lossy(&handler.take_diagnostic()).to_string(),
+                    )));
+                }
+                Ok(DecodeStatus::FrameCompleteConfiguration) => {
+                    let mut configuration = handler.take_configuration();
+                    // Drop the FCS at the end
+                    configuration.truncate(configuration.len() - 2);
+                    results.push(Ok(Slipmux::Configuration(configuration)));
+                }
+                Ok(DecodeStatus::FrameCompleteIp) => {
+                    results.push(Ok(Slipmux::Packet(handler.take_ip())));
+                }
+                Err(err) => {
+                    results.push(Err(err));
+                }
+            }
+        }
+        results
+    }
+
     fn buffered_frame_handler_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
@@ -538,6 +567,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -574,6 +604,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -610,6 +641,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -640,6 +672,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -678,6 +711,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -742,6 +776,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for results in results_arr {
             for slipframe in results {
@@ -784,6 +819,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -829,6 +865,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 2);
@@ -899,6 +936,7 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
         ];
         for frames in results_arr {
             assert_eq!(frames.len(), 3);
