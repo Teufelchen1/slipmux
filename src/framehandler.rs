@@ -475,6 +475,51 @@ mod tests {
         results
     }
 
+    /// Like vec_single_buffer_wrapper, but with a heapless vec of length 10.
+    fn heapless_single_buffer_wrapper<const N: usize>(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
+        let mut slipmux = Decoder::new();
+        let mut handler = SingleBufferHandler::<heapless::Vec<u8, N>>::new();
+        let mut results: Vec<Result<Slipmux, Error>> = vec![];
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    let (diagnostic, error) = handler.take_diagnostic_and_error();
+                    results.push(match error {
+                        None => Ok(Slipmux::Diagnostic(
+                            String::from_utf8_lossy(&diagnostic).to_string(),
+                        )),
+                        // If that variant is ever removed -- after all, it is unused --, we'll
+                        // have to change the wrappers' signatures.
+                        Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
+                    });
+                }
+                Ok(DecodeStatus::FrameCompleteConfiguration) => {
+                    let (mut configuration, error) = handler.take_configuration_and_error();
+                    results.push(match error {
+                        None => {
+                            // Drop the FCS at the end
+                            configuration.truncate(configuration.len() - 2);
+                            Ok(Slipmux::Configuration((*configuration).into()))
+                        }
+                        Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
+                    });
+                }
+                Ok(DecodeStatus::FrameCompleteIp) => {
+                    let (ip, error) = handler.take_ip_and_error();
+                    results.push(match error {
+                        None => Ok(Slipmux::Packet((*ip).into())),
+                        Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
+                    });
+                }
+                Err(err) => {
+                    results.push(Err(err));
+                }
+            }
+        }
+        results
+    }
+
     fn buffered_frame_handler_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
@@ -568,6 +613,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<12>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -577,6 +623,12 @@ mod tests {
                 _ => unreachable!(),
             }
         }
+        let mut results_too_short = heapless_single_buffer_wrapper::<11>(&SLIPMUX_ENCODED);
+        assert_eq!(results_too_short.len(), 1);
+        assert!(matches!(
+            results_too_short.pop().unwrap().unwrap_err(),
+            Error::NotEnoughSpace
+        ));
     }
 
     #[test]
@@ -605,6 +657,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<14>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -642,6 +695,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<14>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -673,6 +727,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<12>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -712,6 +767,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -777,6 +833,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for results in results_arr {
             for slipframe in results {
@@ -820,6 +877,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -866,6 +924,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 2);
@@ -937,6 +996,7 @@ mod tests {
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
             vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for frames in results_arr {
             assert_eq!(frames.len(), 3);

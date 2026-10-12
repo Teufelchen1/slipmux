@@ -39,3 +39,4 @@ embedded-io = "0.7"
 
 [dev-dependencies]
 coap-lite = "0.13"
+heapless = { version = "0.9", features = ["embedded-io-v0.7"] }
