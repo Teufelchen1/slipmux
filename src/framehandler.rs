@@ -218,41 +218,86 @@ impl FrameHandler for BufferedFrameHandler {
 }
 
 /// A handler that writes into some owned buffer, e.g. a `heapless::Vec`.
-pub struct SingleBufferHandler<B: embedded_io::Write + Default + AsRef<[u8]>> {
+pub struct SingleBufferHandler<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B) = fn(&mut B)>
+{
     /// Set after a frame start, left in place even at completion to indicate the type of buffer
     /// content.
     frame_type: Option<FrameType>,
     /// Spooled data of type as indicated in [`Self::frame_type`]; for Control messages, this
     /// includes FCS.
-    buffer: Option<B>,
+    ///
+    /// This buffer may be in an odd shape (e.g. might have been mutated by a consuming function)
+    /// when [`Self::frame_type`] is `None` (but still within B's type invariants, as no unsafeness
+    /// is involved).
+    buffer: B,
     /// First error that occurred since the start of the frame.
     ///
     /// This does not overwrite the buffer, since acting on some kind of overrun errors can still
     /// be useful in some cases.
     error: Option<<B as embedded_io::ErrorType>::Error>,
+    /// Function that resets the buffer into a fresh state.
+    rewind: Rewind,
 }
 
-impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B> {
+impl<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B)> SingleBufferHandler<B, Rewind> {
     /// Creates a new handler
+    ///
+    /// It takes
+    ///
+    /// - an initial buffer, and
+    /// - a function that turns that buffer into a fresh buffer.
+    ///
+    /// For buffers whose [`Default::default()`] is cheap, the [`Self::new()`] function provides an
+    /// easier constructor.
+    // On the name: This sounds a bit odd, but it's really "single buffer" because the "single" in
+    // the type name is "At any time, there is only ever one", and the "single" here is "There is
+    // only one throughout the lifetime".
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn new_single_buffer(buffer: B, rewind: Rewind) -> Self {
         Self {
             frame_type: None,
-            buffer: None,
+            buffer,
             error: None,
+            rewind,
         }
     }
+}
 
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B, fn(&mut B)> {
+    /// Creates a new handler for buffers that implement Default
+    ///
+    /// This worke best for all kind of small owned `B` (such as heap-allocated vectors or packet
+    /// buffers or slabs), but is not recommended for types where moving the `B` out and replacing
+    /// it with a new one is heavy on the stack.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            frame_type: None,
+            buffer: Default::default(),
+            error: None,
+            rewind: |b| {
+                // For heapless it may even be a bit more efficient to have a special
+                // implementation because that wouldn't need to zero the buffer, but zeroing is
+                // probably fast enough.
+                *b = Default::default();
+            },
+        }
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)>
+    SingleBufferHandler<B, Rewind>
+{
     fn take_buffer_and_error(
         &mut self,
         expected_type: FrameType,
     ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
         assert!(
-            self.frame_type == Some(expected_type),
+            self.frame_type.take() == Some(expected_type),
             "Requested frame type does not match present frame."
         );
 
-        let buffer = self.buffer.take().unwrap();
+        let buffer = core::mem::take(&mut self.buffer);
         let error = self.error.take();
         (buffer, error)
     }
@@ -329,7 +374,9 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> Default for SingleBufferHand
     }
 }
 
-impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBufferHandler<B> {
+impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)> FrameHandler
+    for SingleBufferHandler<B, Rewind>
+{
     fn begin_frame(&mut self, frame_type: FrameType) {
         // Other implementations of FrameHandler check whether the previous operation has really
         // ended by asserting that frame_type == None, or some equivalent thereof. This one does
@@ -339,16 +386,12 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBuffe
         // network peer's behavior anyway, but just the correctness of the remaining slipmux
         // implementation).
         self.frame_type = Some(frame_type);
-        self.buffer = Some(Default::default());
+        (self.rewind)(&mut self.buffer);
         self.error = None;
     }
 
     fn write_byte(&mut self, byte: u8) {
-        let Some(buffer) = &mut self.buffer else {
-            panic!("Called .write_byte before .begin_frame, frame_type not set.");
-        };
-
-        let written = buffer.write(&[byte]);
+        let written = self.buffer.write(&[byte]);
         if let Err(e) = written
             && self.error.is_none()
         {
