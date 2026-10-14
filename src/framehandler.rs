@@ -594,32 +594,32 @@ mod tests {
         }
     }
 
+    const DIAGNOSTIC_SLIPMUX_ENCODED: [u8; 15] = [
+        Constants::END,
+        Constants::DIAGNOSTIC,
+        0x48,
+        0x65,
+        0x6c,
+        0x6c,
+        0x6f,
+        0x20,
+        0x57,
+        0x6f,
+        0x72,
+        0x6c,
+        0x64,
+        0x21,
+        Constants::END,
+    ];
+
     #[test]
     fn diagnostic() {
-        const SLIPMUX_ENCODED: [u8; 15] = [
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-
         let results_arr = [
-            buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
-            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
-            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
-            heapless_single_buffer_wrapper::<12>(&SLIPMUX_ENCODED),
+            buffered_frame_handler_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            owned_latest_frame_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<12>(&DIAGNOSTIC_SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -629,10 +629,14 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-        let mut results_too_short = heapless_single_buffer_wrapper::<11>(&SLIPMUX_ENCODED);
-        assert_eq!(results_too_short.len(), 1);
+    }
+
+    #[test]
+    fn single_buffer_handler_errs_when_undersized() {
+        let mut results = heapless_single_buffer_wrapper::<11>(&DIAGNOSTIC_SLIPMUX_ENCODED);
+        assert_eq!(results.len(), 1);
         assert!(matches!(
-            results_too_short.pop().unwrap().unwrap_err(),
+            results.pop().unwrap().unwrap_err(),
             Error::NotEnoughSpace
         ));
     }
