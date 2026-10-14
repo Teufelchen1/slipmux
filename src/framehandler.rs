@@ -302,7 +302,7 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)>
         (buffer, error)
     }
 
-    /// Takes the diangostic frame out of self, along with any error that occurred.
+    /// Takes the diagnostic frame out of self, along with any error that occurred.
     ///
     /// # Panics
     ///
