@@ -331,8 +331,13 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> Default for SingleBufferHand
 
 impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBufferHandler<B> {
     fn begin_frame(&mut self, frame_type: FrameType) {
-        // Not checking if the frame type is None: We'll leave that value in place after completion
-        // so that the user has time to take the value out.
+        // Other implementations of FrameHandler check whether the previous operation has really
+        // ended by asserting that frame_type == None, or some equivalent thereof. This one does
+        // not, because the information about what was received is left in place for the user to
+        // take out (in `take_diagnostic_and_error()` and similar) -- but it's not an error for the
+        // user to not take it out, so we just don't check. (That check would not be testing the
+        // network peer's behavior anyway, but just the correctness of the remaining slipmux
+        // implementation).
         self.frame_type = Some(frame_type);
         self.buffer = Some(Default::default());
         self.error = None;
