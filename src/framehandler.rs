@@ -261,6 +261,83 @@ impl<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B)> SingleBufferHandle
             rewind,
         }
     }
+
+    fn read_buffer_and_error(
+        &mut self,
+        expected_type: FrameType,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        assert!(
+            self.frame_type.take() == Some(expected_type),
+            "Requested frame type does not match present frame."
+        );
+
+        (&mut self.buffer, self.error.take())
+
+        // Not rewinding yet: frame type is None, so nobody will read this anyway, and the
+        // start-of-frame rewinds it reliably -- and also, we're handing out that &mut, so we don't
+        // get to decide what runs after.
+    }
+
+    /// Reads a single received diagnostic frame out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the frame was already taken / read, or there was a different frame pending than a diagnostic
+    /// frame.
+    pub fn read_diagnostic_and_error(
+        &mut self,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.read_buffer_and_error(FrameType::Diagnostic)
+    }
+
+    /// Reads a single received configuration frame (including the FCS) out of self, along with any
+    /// error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the frame was already taken / read, or there was a different frame pending than a configuration
+    /// frame.
+    pub fn read_configuration_and_error(
+        &mut self,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.read_buffer_and_error(FrameType::Configuration)
+    }
+
+    /// Reads a single received IP packet out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the frame was already taken / read, or there was a different frame pending than an IP
+    /// packet.
+    pub fn read_ip_and_error(
+        &mut self,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.read_buffer_and_error(FrameType::Ip)
+    }
+
+    /// Like `read_diagonstic_and_error`, but for infallible buffers.
+    pub fn read_diagnostic(&mut self) -> &mut B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.read_buffer_and_error(FrameType::Diagnostic).0
+    }
+
+    /// Like `read_configuration_and_error`, but for infallible buffers.
+    pub fn read_configuration(&mut self) -> &mut B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.read_buffer_and_error(FrameType::Configuration).0
+    }
+
+    /// Like `read_ip_and_error`, but for infallible buffers.
+    pub fn read_ip(&mut self) -> &mut B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.read_buffer_and_error(FrameType::Ip).0
+    }
 }
 
 impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B, fn(&mut B)> {
@@ -314,7 +391,7 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)>
         self.take_buffer_and_error(FrameType::Diagnostic)
     }
 
-    /// Takes the configuration cluding the FCS) out of self, along with any error that
+    /// Takes the configuration including the FCS) out of self, along with any error that
     /// occurred.
     ///
     /// # Panics
@@ -525,18 +602,24 @@ mod tests {
     }
 
     /// Like `vec_single_buffer_wrapper`, but with a heapless vec of length N.
+    ///
+    /// Also, as those are nothing you'd want to move onto the stack, this uses the
+    /// `new_single_buffer` and `read_*` usage style.
     fn heapless_single_buffer_wrapper<const N: usize>(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
-        let mut handler = SingleBufferHandler::<heapless::Vec<u8, N>>::new();
+        let mut handler = SingleBufferHandler::new_single_buffer(
+            heapless::Vec::<u8, N>::new(),
+            heapless::Vec::clear,
+        );
         let mut results: Vec<Result<Slipmux, Error>> = vec![];
         for byte in data {
             match slipmux.decode(*byte, &mut handler) {
                 Ok(DecodeStatus::Incomplete) => {}
                 Ok(DecodeStatus::FrameCompleteDiagnostic) => {
-                    let (diagnostic, error) = handler.take_diagnostic_and_error();
+                    let (diagnostic, error) = handler.read_diagnostic_and_error();
                     results.push(match error {
                         None => Ok(Slipmux::Diagnostic(
-                            String::from_utf8_lossy(&diagnostic).to_string(),
+                            String::from_utf8_lossy(diagnostic).to_string(),
                         )),
                         // If that variant is ever removed -- after all, it is unused --, we'll
                         // have to change the wrappers' signatures.
@@ -544,20 +627,20 @@ mod tests {
                     });
                 }
                 Ok(DecodeStatus::FrameCompleteConfiguration) => {
-                    let (mut configuration, error) = handler.take_configuration_and_error();
+                    let (mut configuration, error) = handler.read_configuration_and_error();
                     results.push(match error {
                         None => {
                             // Drop the FCS at the end
                             configuration.truncate(configuration.len() - 2);
-                            Ok(Slipmux::Configuration((*configuration).into()))
+                            Ok(Slipmux::Configuration(configuration.to_vec()))
                         }
                         Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
                     });
                 }
                 Ok(DecodeStatus::FrameCompleteIp) => {
-                    let (ip, error) = handler.take_ip_and_error();
+                    let (ip, error) = handler.read_ip_and_error();
                     results.push(match error {
-                        None => Ok(Slipmux::Packet((*ip).into())),
+                        None => Ok(Slipmux::Packet(ip.to_vec())),
                         Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
                     });
                 }
