@@ -641,6 +641,28 @@ mod tests {
         ));
     }
 
+    /// Tests the panic behavior of the [`SingleBufferHandler`].
+    ///
+    /// This can not go through [`heapless_single_buffer_wrapper()`] because that is a correct
+    /// implementation of using the buffer handler, and thus will not cause the panic.
+    #[test]
+    #[should_panic(expected = "Requested frame type does not match present frame.")]
+    fn single_buffer_handler_panics_when_taking_wrong_type() {
+        let data: &[u8] = &DIAGNOSTIC_SLIPMUX_ENCODED;
+        let mut slipmux = Decoder::new();
+        let mut handler = SingleBufferHandler::<heapless::Vec<u8, 12>>::new();
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    // Delierately taking the wrong frame type to trigger the panic.
+                    handler.take_ip_and_error();
+                }
+                _ => unreachable!("Not present in this test case's data"),
+            }
+        }
+    }
+
     #[test]
     fn configuration() {
         const SLIPMUX_ENCODED: [u8; 17] = [
