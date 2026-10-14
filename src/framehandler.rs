@@ -217,6 +217,151 @@ impl FrameHandler for BufferedFrameHandler {
     }
 }
 
+/// A handler that writes into some owned buffer, e.g. a `heapless::Vec`.
+pub struct SingleBufferHandler<B: embedded_io::Write + Default + AsRef<[u8]>> {
+    /// Set after a frame start, left in place even at completion to indicate the type of buffer
+    /// content.
+    frame_type: Option<FrameType>,
+    /// Spooled data of type as indicated in [`Self::frame_type`]; for Control messages, this
+    /// includes FCS.
+    buffer: Option<B>,
+    /// First error that occurred since the start of the frame.
+    ///
+    /// This does not overwrite the buffer, since acting on some kind of overrun errors can still
+    /// be useful in some cases.
+    error: Option<<B as embedded_io::ErrorType>::Error>,
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B> {
+    /// Creates a new handler
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            frame_type: None,
+            buffer: None,
+            error: None,
+        }
+    }
+
+    fn take_buffer_and_error(
+        &mut self,
+        expected_type: FrameType,
+    ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        assert!(
+            self.frame_type == Some(expected_type),
+            "Requested frame type does not match present frame."
+        );
+
+        let buffer = self.buffer.take().unwrap();
+        let error = self.error.take();
+        (buffer, error)
+    }
+
+    /// Takes the diangostic frame out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the buffer was already taken, or there was a different frame pending than a diagnostic
+    /// frame.
+    pub fn take_diagnostic_and_error(
+        &mut self,
+    ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.take_buffer_and_error(FrameType::Diagnostic)
+    }
+
+    /// Takes the configuration cluding the FCS) out of self, along with any error that
+    /// occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the buffer was already taken, or there was a different frame pending than a
+    /// configuration frame.
+    pub fn take_configuration_and_error(
+        &mut self,
+    ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.take_buffer_and_error(FrameType::Configuration)
+    }
+
+    /// Takes the IP packet out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the buffer was already taken, or there was a different frame pending than a packet
+    /// frame.
+    pub fn take_ip_and_error(&mut self) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.take_buffer_and_error(FrameType::Ip)
+    }
+
+    /// Like `take_diagnostic_and_error`, but for infallible buffers.
+    pub fn take_diagnostic(&mut self) -> B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        // That's quite verbose for `self.take_diagnostic_and_error().0`, but makes sure that the
+        // compiler agress that we don't throw away information here.
+        let (buffer, error) = self.take_diagnostic_and_error();
+        match error.map(core::convert::Into::into) {
+            None => (),
+        }
+        buffer
+    }
+
+    /// Like `take_configuration_and_error`, but for infallible buffers.
+    pub fn take_configuration(&mut self) -> B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.take_configuration_and_error().0
+    }
+
+    /// Like `take_ip_and_error`, but for infallible buffers.
+    pub fn take_ip(&mut self) -> B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.take_ip_and_error().0
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> Default for SingleBufferHandler<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBufferHandler<B> {
+    fn begin_frame(&mut self, frame_type: FrameType) {
+        // Other implementations of FrameHandler check whether the previous operation has really
+        // ended by asserting that frame_type == None, or some equivalent thereof. This one does
+        // not, because the information about what was received is left in place for the user to
+        // take out (in `take_diagnostic_and_error()` and similar) -- but it's not an error for the
+        // user to not take it out, so we just don't check. (That check would not be testing the
+        // network peer's behavior anyway, but just the correctness of the remaining slipmux
+        // implementation).
+        self.frame_type = Some(frame_type);
+        self.buffer = Some(Default::default());
+        self.error = None;
+    }
+
+    fn write_byte(&mut self, byte: u8) {
+        let Some(buffer) = &mut self.buffer else {
+            panic!("Called .write_byte before .begin_frame, frame_type not set.");
+        };
+
+        let written = buffer.write(&[byte]);
+        if let Err(e) = written
+            && self.error.is_none()
+        {
+            self.error = Some(e);
+        }
+    }
+
+    fn end_frame(&mut self, _: Option<Error>) {
+        // The application using this handler will know to pull something out and thus clear the
+        // buffer -- or not, and we just start over.
+    }
+}
+
 #[cfg(feature = "std")]
 #[cfg(test)]
 mod tests {
@@ -307,6 +452,80 @@ mod tests {
         results
     }
 
+    fn vec_single_buffer_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
+        let mut slipmux = Decoder::new();
+        let mut handler = SingleBufferHandler::<Vec<u8>>::new();
+        let mut results: Vec<Result<Slipmux, Error>> = vec![];
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    results.push(Ok(Slipmux::Diagnostic(
+                        String::from_utf8_lossy(&handler.take_diagnostic()).to_string(),
+                    )));
+                }
+                Ok(DecodeStatus::FrameCompleteConfiguration) => {
+                    let mut configuration = handler.take_configuration();
+                    // Drop the FCS at the end
+                    configuration.truncate(configuration.len() - 2);
+                    results.push(Ok(Slipmux::Configuration(configuration)));
+                }
+                Ok(DecodeStatus::FrameCompleteIp) => {
+                    results.push(Ok(Slipmux::Packet(handler.take_ip())));
+                }
+                Err(err) => {
+                    results.push(Err(err));
+                }
+            }
+        }
+        results
+    }
+
+    /// Like `vec_single_buffer_wrapper`, but with a heapless vec of length N.
+    fn heapless_single_buffer_wrapper<const N: usize>(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
+        let mut slipmux = Decoder::new();
+        let mut handler = SingleBufferHandler::<heapless::Vec<u8, N>>::new();
+        let mut results: Vec<Result<Slipmux, Error>> = vec![];
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    let (diagnostic, error) = handler.take_diagnostic_and_error();
+                    results.push(match error {
+                        None => Ok(Slipmux::Diagnostic(
+                            String::from_utf8_lossy(&diagnostic).to_string(),
+                        )),
+                        // If that variant is ever removed -- after all, it is unused --, we'll
+                        // have to change the wrappers' signatures.
+                        Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
+                    });
+                }
+                Ok(DecodeStatus::FrameCompleteConfiguration) => {
+                    let (mut configuration, error) = handler.take_configuration_and_error();
+                    results.push(match error {
+                        None => {
+                            // Drop the FCS at the end
+                            configuration.truncate(configuration.len() - 2);
+                            Ok(Slipmux::Configuration((*configuration).into()))
+                        }
+                        Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
+                    });
+                }
+                Ok(DecodeStatus::FrameCompleteIp) => {
+                    let (ip, error) = handler.take_ip_and_error();
+                    results.push(match error {
+                        None => Ok(Slipmux::Packet((*ip).into())),
+                        Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
+                    });
+                }
+                Err(err) => {
+                    results.push(Err(err));
+                }
+            }
+        }
+        results
+    }
+
     fn buffered_frame_handler_wrapper(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
         let mut handler = BufferedFrameHandler::new();
@@ -375,30 +594,32 @@ mod tests {
         }
     }
 
+    const DIAGNOSTIC_SLIPMUX_ENCODED: [u8; 15] = [
+        Constants::END,
+        Constants::DIAGNOSTIC,
+        0x48,
+        0x65,
+        0x6c,
+        0x6c,
+        0x6f,
+        0x20,
+        0x57,
+        0x6f,
+        0x72,
+        0x6c,
+        0x64,
+        0x21,
+        Constants::END,
+    ];
+
     #[test]
     fn diagnostic() {
-        const SLIPMUX_ENCODED: [u8; 15] = [
-            Constants::END,
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-
         let results_arr = [
-            buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
-            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            buffered_frame_handler_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            owned_latest_frame_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            referenced_latest_frame_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&DIAGNOSTIC_SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<12>(&DIAGNOSTIC_SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -406,6 +627,38 @@ mod tests {
             match frame.unwrap() {
                 Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
                 _ => unreachable!(),
+            }
+        }
+    }
+
+    #[test]
+    fn single_buffer_handler_errs_when_undersized() {
+        let mut results = heapless_single_buffer_wrapper::<11>(&DIAGNOSTIC_SLIPMUX_ENCODED);
+        assert_eq!(results.len(), 1);
+        assert!(matches!(
+            results.pop().unwrap().unwrap_err(),
+            Error::NotEnoughSpace
+        ));
+    }
+
+    /// Tests the panic behavior of the [`SingleBufferHandler`].
+    ///
+    /// This can not go through [`heapless_single_buffer_wrapper()`] because that is a correct
+    /// implementation of using the buffer handler, and thus will not cause the panic.
+    #[test]
+    #[should_panic(expected = "Requested frame type does not match present frame.")]
+    fn single_buffer_handler_panics_when_taking_wrong_type() {
+        let data: &[u8] = &DIAGNOSTIC_SLIPMUX_ENCODED;
+        let mut slipmux = Decoder::new();
+        let mut handler = SingleBufferHandler::<heapless::Vec<u8, 12>>::new();
+        for byte in data {
+            match slipmux.decode(*byte, &mut handler) {
+                Ok(DecodeStatus::Incomplete) => {}
+                Ok(DecodeStatus::FrameCompleteDiagnostic) => {
+                    // Delierately taking the wrong frame type to trigger the panic.
+                    handler.take_ip_and_error();
+                }
+                _ => unreachable!("Not present in this test case's data"),
             }
         }
     }
@@ -435,6 +688,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<14>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -471,6 +726,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<14>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -501,6 +758,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<12>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -539,6 +798,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -603,6 +864,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for results in results_arr {
             for slipframe in results {
@@ -645,6 +908,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 1);
@@ -690,6 +955,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for mut results in results_arr {
             assert_eq!(results.len(), 2);
@@ -760,6 +1027,8 @@ mod tests {
             buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
             owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
             referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
+            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
+            heapless_single_buffer_wrapper::<100>(&SLIPMUX_ENCODED),
         ];
         for frames in results_arr {
             assert_eq!(frames.len(), 3);

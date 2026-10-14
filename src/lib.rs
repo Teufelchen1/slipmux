@@ -165,6 +165,7 @@ pub use framehandler::BufferedFrameHandler;
 #[cfg(feature = "std")]
 pub use framehandler::OwnedLatestFrame;
 pub use framehandler::ReferencedLatestFrame;
+pub use framehandler::SingleBufferHandler;
 
 /// Magic byte constants used in Slipmux
 #[non_exhaustive]
@@ -203,7 +204,7 @@ impl Constants {
 }
 
 /// The frame types that Slipmux offers
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FrameType {
     /// A diagnostic frame type.
     Diagnostic,

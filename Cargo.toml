@@ -14,7 +14,7 @@ version = "0.4.1"
 
 [features]
 default = ["std"]
-std = []
+std = ["embedded-io/std"]
 
 [lints.rust]
 missing_docs = "warn"
@@ -35,6 +35,8 @@ lto = true
 
 [dependencies]
 serial-line-ip = "0.5"
+embedded-io = "0.7"
 
 [dev-dependencies]
 coap-lite = "0.13"
+heapless = { version = "0.9", features = ["embedded-io-v0.7"] }
