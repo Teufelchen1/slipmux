@@ -449,7 +449,7 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> Default for SingleBufferHand
     }
 }
 
-impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)> FrameHandler
+impl<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B)> FrameHandler
     for SingleBufferHandler<B, Rewind>
 {
     fn begin_frame(&mut self, frame_type: FrameType) {
