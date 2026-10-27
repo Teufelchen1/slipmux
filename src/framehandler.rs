@@ -218,46 +218,166 @@ impl FrameHandler for BufferedFrameHandler {
 }
 
 /// A handler that writes into some owned buffer, e.g. a `heapless::Vec`.
-pub struct SingleBufferHandler<B: embedded_io::Write + Default + AsRef<[u8]>> {
+pub struct SingleBufferHandler<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B) = fn(&mut B)>
+{
     /// Set after a frame start, left in place even at completion to indicate the type of buffer
     /// content.
     frame_type: Option<FrameType>,
     /// Spooled data of type as indicated in [`Self::frame_type`]; for Control messages, this
     /// includes FCS.
-    buffer: Option<B>,
+    ///
+    /// This buffer may be in an odd shape (e.g. might have been mutated by a consuming function)
+    /// when [`Self::frame_type`] is `None` (but still within B's type invariants, as no unsafeness
+    /// is involved).
+    buffer: B,
     /// First error that occurred since the start of the frame.
     ///
     /// This does not overwrite the buffer, since acting on some kind of overrun errors can still
     /// be useful in some cases.
     error: Option<<B as embedded_io::ErrorType>::Error>,
+    /// Function that resets the buffer into a fresh state.
+    rewind: Rewind,
 }
 
-impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B> {
+impl<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B)> SingleBufferHandler<B, Rewind> {
     /// Creates a new handler
+    ///
+    /// It takes
+    ///
+    /// - an initial buffer, and
+    /// - a function that turns that buffer into a fresh buffer.
+    ///
+    /// For buffers whose [`Default::default()`] is cheap, the [`Self::new()`] function provides an
+    /// easier constructor.
+    // On the name: This sounds a bit odd, but it's really "single buffer" because the "single" in
+    // the type name is "At any time, there is only ever one", and the "single" here is "There is
+    // only one throughout the lifetime".
     #[must_use]
-    pub const fn new() -> Self {
+    pub const fn new_single_buffer(buffer: B, rewind: Rewind) -> Self {
         Self {
             frame_type: None,
-            buffer: None,
+            buffer,
             error: None,
+            rewind,
         }
     }
 
+    fn read_buffer_and_error(
+        &mut self,
+        expected_type: FrameType,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        assert!(
+            self.frame_type.take() == Some(expected_type),
+            "Requested frame type does not match present frame."
+        );
+
+        (&mut self.buffer, self.error.take())
+
+        // Not rewinding yet: frame type is None, so nobody will read this anyway, and the
+        // start-of-frame rewinds it reliably -- and also, we're handing out that &mut, so we don't
+        // get to decide what runs after.
+    }
+
+    /// Reads a single received diagnostic frame out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the frame was already taken / read, or there was a different frame pending than a diagnostic
+    /// frame.
+    pub fn read_diagnostic_and_error(
+        &mut self,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.read_buffer_and_error(FrameType::Diagnostic)
+    }
+
+    /// Reads a single received configuration frame (including the FCS) out of self, along with any
+    /// error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the frame was already taken / read, or there was a different frame pending than a configuration
+    /// frame.
+    pub fn read_configuration_and_error(
+        &mut self,
+    ) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.read_buffer_and_error(FrameType::Configuration)
+    }
+
+    /// Reads a single received IP packet out of self, along with any error that occurred.
+    ///
+    /// # Panics
+    ///
+    /// … if the frame was already taken / read, or there was a different frame pending than an IP
+    /// packet.
+    pub fn read_ip_and_error(&mut self) -> (&mut B, Option<<B as embedded_io::ErrorType>::Error>) {
+        self.read_buffer_and_error(FrameType::Ip)
+    }
+
+    /// Like `read_diagonstic_and_error`, but for infallible buffers.
+    pub fn read_diagnostic(&mut self) -> &mut B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.read_buffer_and_error(FrameType::Diagnostic).0
+    }
+
+    /// Like `read_configuration_and_error`, but for infallible buffers.
+    pub fn read_configuration(&mut self) -> &mut B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.read_buffer_and_error(FrameType::Configuration).0
+    }
+
+    /// Like `read_ip_and_error`, but for infallible buffers.
+    pub fn read_ip(&mut self) -> &mut B
+    where
+        <B as embedded_io::ErrorType>::Error: Into<core::convert::Infallible>,
+    {
+        self.read_buffer_and_error(FrameType::Ip).0
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B, fn(&mut B)> {
+    /// Creates a new handler for buffers that implement Default
+    ///
+    /// This worke best for all kind of small owned `B` (such as heap-allocated vectors or packet
+    /// buffers or slabs), but is not recommended for types where moving the `B` out and replacing
+    /// it with a new one is heavy on the stack.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            frame_type: None,
+            buffer: Default::default(),
+            error: None,
+            rewind: |b| {
+                // For heapless it may even be a bit more efficient to have a special
+                // implementation because that wouldn't need to zero the buffer, but zeroing is
+                // probably fast enough.
+                *b = Default::default();
+            },
+        }
+    }
+}
+
+impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)>
+    SingleBufferHandler<B, Rewind>
+{
     fn take_buffer_and_error(
         &mut self,
         expected_type: FrameType,
     ) -> (B, Option<<B as embedded_io::ErrorType>::Error>) {
         assert!(
-            self.frame_type == Some(expected_type),
+            self.frame_type.take() == Some(expected_type),
             "Requested frame type does not match present frame."
         );
 
-        let buffer = self.buffer.take().unwrap();
+        let buffer = core::mem::take(&mut self.buffer);
         let error = self.error.take();
         (buffer, error)
     }
 
-    /// Takes the diangostic frame out of self, along with any error that occurred.
+    /// Takes the diagnostic frame out of self, along with any error that occurred.
     ///
     /// # Panics
     ///
@@ -269,7 +389,7 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> SingleBufferHandler<B> {
         self.take_buffer_and_error(FrameType::Diagnostic)
     }
 
-    /// Takes the configuration cluding the FCS) out of self, along with any error that
+    /// Takes the configuration including the FCS) out of self, along with any error that
     /// occurred.
     ///
     /// # Panics
@@ -329,7 +449,9 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> Default for SingleBufferHand
     }
 }
 
-impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBufferHandler<B> {
+impl<B: embedded_io::Write + AsRef<[u8]>, Rewind: Fn(&mut B)> FrameHandler
+    for SingleBufferHandler<B, Rewind>
+{
     fn begin_frame(&mut self, frame_type: FrameType) {
         // Other implementations of FrameHandler check whether the previous operation has really
         // ended by asserting that frame_type == None, or some equivalent thereof. This one does
@@ -339,16 +461,12 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>> FrameHandler for SingleBuffe
         // network peer's behavior anyway, but just the correctness of the remaining slipmux
         // implementation).
         self.frame_type = Some(frame_type);
-        self.buffer = Some(Default::default());
+        (self.rewind)(&mut self.buffer);
         self.error = None;
     }
 
     fn write_byte(&mut self, byte: u8) {
-        let Some(buffer) = &mut self.buffer else {
-            panic!("Called .write_byte before .begin_frame, frame_type not set.");
-        };
-
-        let written = buffer.write(&[byte]);
+        let written = self.buffer.write(&[byte]);
         if let Err(e) = written
             && self.error.is_none()
         {
@@ -482,18 +600,24 @@ mod tests {
     }
 
     /// Like `vec_single_buffer_wrapper`, but with a heapless vec of length N.
+    ///
+    /// Also, as those are nothing you'd want to move onto the stack, this uses the
+    /// `new_single_buffer` and `read_*` usage style.
     fn heapless_single_buffer_wrapper<const N: usize>(data: &[u8]) -> Vec<Result<Slipmux, Error>> {
         let mut slipmux = Decoder::new();
-        let mut handler = SingleBufferHandler::<heapless::Vec<u8, N>>::new();
+        let mut handler = SingleBufferHandler::new_single_buffer(
+            heapless::Vec::<u8, N>::new(),
+            heapless::Vec::clear,
+        );
         let mut results: Vec<Result<Slipmux, Error>> = vec![];
         for byte in data {
             match slipmux.decode(*byte, &mut handler) {
                 Ok(DecodeStatus::Incomplete) => {}
                 Ok(DecodeStatus::FrameCompleteDiagnostic) => {
-                    let (diagnostic, error) = handler.take_diagnostic_and_error();
+                    let (diagnostic, error) = handler.read_diagnostic_and_error();
                     results.push(match error {
                         None => Ok(Slipmux::Diagnostic(
-                            String::from_utf8_lossy(&diagnostic).to_string(),
+                            String::from_utf8_lossy(diagnostic).to_string(),
                         )),
                         // If that variant is ever removed -- after all, it is unused --, we'll
                         // have to change the wrappers' signatures.
@@ -501,20 +625,20 @@ mod tests {
                     });
                 }
                 Ok(DecodeStatus::FrameCompleteConfiguration) => {
-                    let (mut configuration, error) = handler.take_configuration_and_error();
+                    let (configuration, error) = handler.read_configuration_and_error();
                     results.push(match error {
                         None => {
                             // Drop the FCS at the end
                             configuration.truncate(configuration.len() - 2);
-                            Ok(Slipmux::Configuration((*configuration).into()))
+                            Ok(Slipmux::Configuration(configuration.to_vec()))
                         }
                         Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
                     });
                 }
                 Ok(DecodeStatus::FrameCompleteIp) => {
-                    let (ip, error) = handler.take_ip_and_error();
+                    let (ip, error) = handler.read_ip_and_error();
                     results.push(match error {
-                        None => Ok(Slipmux::Packet((*ip).into())),
+                        None => Ok(Slipmux::Packet(ip.to_vec())),
                         Some(heapless::CapacityError { .. }) => Err(Error::NotEnoughSpace),
                     });
                 }
