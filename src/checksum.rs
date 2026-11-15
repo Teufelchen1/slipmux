@@ -57,6 +57,7 @@ const FCS_LOOKUP: [u16; 256] = [
     0x3de3, 0x2c6a, 0x1ef1, 0x0f78,
 ];
 
+#[expect(clippy::cast_possible_truncation, reason = "truncation is wanted")]
 pub const fn fcs16_byte(fcs: u16, byte: u8) -> u16 {
     (fcs >> 8) ^ FCS_LOOKUP[(fcs as u8 ^ byte) as usize]
 }
