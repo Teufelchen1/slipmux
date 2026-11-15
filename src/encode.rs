@@ -135,6 +135,7 @@ impl<'input> ChunkedEncoder<'input> {
 
     /// Advance whichever slice was just selected in [`Self::slice_to_encode()`] by some amount of
     /// bytes.
+    #[expect(clippy::cast_possible_truncation)] // TODO: should this be fixed?
     fn advance_slice(&mut self, amount: usize) {
         if !self.header.is_empty() {
             self.header = &self.header[amount..];
