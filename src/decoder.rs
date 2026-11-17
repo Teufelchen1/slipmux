@@ -6,7 +6,7 @@ use crate::Error;
 
 enum SlipmuxState {
     Idle,
-    UnkownFrameType,
+    UnknownFrameType,
     Diagnostic,
     DiagnosticEscape,
     Configuration,
@@ -17,7 +17,7 @@ enum SlipmuxState {
 
 use SlipmuxState::{
     Configuration, ConfigurationEscape, Diagnostic, DiagnosticEscape, Idle, Ip, IpEscape,
-    UnkownFrameType,
+    UnknownFrameType,
 };
 
 /// Callback handler for the decoder
@@ -77,7 +77,7 @@ impl Decoder {
     ///
     /// # Errors
     ///
-    /// Will return `Err` if either  an unkown frame type is encountered OR the checksum of a
+    /// Will return `Err` if either an unknown frame type is encountered OR the checksum of a
     /// configuration frame is bad OR a frame got aborted.
     #[expect(clippy::match_same_arms)]
     #[expect(clippy::too_many_lines)]
@@ -107,12 +107,12 @@ impl Decoder {
                     Ip
                 }
                 (Idle, _) => {
-                    self.state = UnkownFrameType;
+                    self.state = UnknownFrameType;
                     handler.end_frame(Some(Error::BadFrameType(byte)));
                     return Err(Error::BadFrameType(byte));
                 }
-                (UnkownFrameType, Constants::END) => Idle,
-                (UnkownFrameType, _) => UnkownFrameType,
+                (UnknownFrameType, Constants::END) => Idle,
+                (UnknownFrameType, _) => UnknownFrameType,
 
                 (Diagnostic, Constants::ESC) => DiagnosticEscape,
                 (Diagnostic, Constants::END) => {

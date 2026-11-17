@@ -1010,10 +1010,10 @@ mod tests {
     }
 
     #[test]
-    fn unkown_frametype() {
+    fn unknown_frametype() {
         const SLIPMUX_ENCODED: [u8; 15] = [
             Constants::END,
-            0x50,
+            0x50, // Unknown start byte / frametype
             0x48,
             0x65,
             0x6c,
@@ -1098,7 +1098,7 @@ mod tests {
     }
 
     #[test]
-    fn stream_with_unkown_frametype_inbetween() {
+    fn stream_with_unknown_frametype_inbetween() {
         // Contains three hello world!s
         const SLIPMUX_ENCODED: [u8; 45] = [
             Constants::END,
@@ -1117,7 +1117,7 @@ mod tests {
             0x21,
             Constants::END,
             Constants::END,
-            0x50,
+            0x50, // Unknown start byte / frametype
             0x48,
             0x65,
             0x6c,
