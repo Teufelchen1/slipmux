@@ -25,7 +25,6 @@ cargo_common_metadata = "warn"
 let_underscore_untyped = "warn"
 str_to_string = "warn"
 
-option-if-let-else = "allow"
 single_match_else = "allow"
 
 [profile.release]
