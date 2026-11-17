@@ -238,7 +238,7 @@ pub enum Error {
     // Decoder errors
     /// The decoder encountered an invalid frame, e.g. a bad escape sequence.
     BadFraming,
-    /// The decoder encountered an unkown frame type.
+    /// The decoder encountered an unknown frame type.
     BadFrameType(u8),
     /// The frame checksum was invalid.
     BadFCS,
