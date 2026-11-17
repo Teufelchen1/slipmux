@@ -6,6 +6,13 @@ use crate::Error;
 
 enum SlipmuxState {
     Idle,
+    Unknown, /* Start state: We do not know what is currently happening "on the wire" when we get
+              * "connected", the current state can not be known. It could be that we are in the
+              * middle of the transfer of a configuration frame. This frame might contain bytes
+              * that match known frame type start bytes! We would enter the wrong state.
+              * The only byte that always gets escaped, and therefore is never inside any
+              * frame, is the `Constants::END` byte. This means we wait until we see this end
+              * byte to change state into `Idle` and can be sure to be in sync with the peer. */
     UnknownFrameType,
     Diagnostic,
     DiagnosticEscape,
@@ -16,7 +23,7 @@ enum SlipmuxState {
 }
 
 use SlipmuxState::{
-    Configuration, ConfigurationEscape, Diagnostic, DiagnosticEscape, Idle, Ip, IpEscape,
+    Configuration, ConfigurationEscape, Diagnostic, DiagnosticEscape, Idle, Ip, IpEscape, Unknown,
     UnknownFrameType,
 };
 
@@ -66,7 +73,7 @@ impl Decoder {
     #[must_use]
     pub const fn new() -> Self {
         Self {
-            state: Idle,
+            state: Unknown,
             fcs: 0,
         }
     }
@@ -88,7 +95,9 @@ impl Decoder {
     ) -> Result<DecodeStatus, Error> {
         self.state = {
             match (&self.state, byte) {
-                (Idle, Constants::END) => Idle, /* ignore empty frame */
+                (Unknown, Constants::END) => Idle,
+                (Unknown, _) => Unknown, // Wait until we see the first end-byte
+                (Idle, Constants::END) => Idle, // ignore empty frame
                 (Idle, Constants::DIAGNOSTIC) => {
                     handler.begin_frame(FrameType::Diagnostic);
                     Diagnostic
@@ -299,5 +308,47 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn starting_in_unknown_state_prevents_entering_erroneous_state() {
+        const SLIPMUX_ENCODED: [u8; 21] = [
+            0x6f,
+            0x72,
+            Constants::CONFIGURATION,
+            Constants::IP6_FROM,
+            0x6c,
+            0x64,
+            Constants::END,
+            Constants::DIAGNOSTIC,
+            0x48,
+            0x65,
+            0x6c,
+            0x6c,
+            0x6f,
+            0x20,
+            0x57,
+            0x6f,
+            0x72,
+            0x6c,
+            0x64,
+            0x21,
+            Constants::END,
+        ];
+
+        let mut slipmux = Decoder::new();
+        let mut handler = OwnedLatestFrame::new();
+
+        for (index, byte) in SLIPMUX_ENCODED.iter().enumerate() {
+            let result: DecodeStatus = slipmux.decode(*byte, &mut handler).unwrap();
+            // Last return should complete the diagnostic frame, all others are incomplete
+            if index == SLIPMUX_ENCODED.len() - 1 {
+                assert!(matches!(result, DecodeStatus::FrameCompleteDiagnostic));
+            } else {
+                assert!(matches!(result, DecodeStatus::Incomplete));
+            }
+        }
+
+        assert_eq!(handler.diagnostic_buffer, b"Hello World!");
     }
 }

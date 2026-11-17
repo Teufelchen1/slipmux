@@ -861,41 +861,6 @@ mod tests {
     }
 
     #[test]
-    fn no_leading_deliminator() {
-        const SLIPMUX_ENCODED: [u8; 14] = [
-            Constants::DIAGNOSTIC,
-            0x48,
-            0x65,
-            0x6c,
-            0x6c,
-            0x6f,
-            0x20,
-            0x57,
-            0x6f,
-            0x72,
-            0x6c,
-            0x64,
-            0x21,
-            Constants::END,
-        ];
-        let results_arr = [
-            buffered_frame_handler_wrapper(&SLIPMUX_ENCODED),
-            owned_latest_frame_wrapper(&SLIPMUX_ENCODED),
-            referenced_latest_frame_wrapper(&SLIPMUX_ENCODED),
-            vec_single_buffer_wrapper(&SLIPMUX_ENCODED),
-            heapless_single_buffer_wrapper::<12>(&SLIPMUX_ENCODED),
-        ];
-        for mut results in results_arr {
-            assert_eq!(results.len(), 1);
-            let frame = results.pop().unwrap();
-            match frame.unwrap() {
-                Slipmux::Diagnostic(s) => assert_eq!(s, "Hello World!"),
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    #[test]
     fn ignore_empty_frames() {
         const SLIPMUX_ENCODED: [u8; 19] = [
             Constants::END,
