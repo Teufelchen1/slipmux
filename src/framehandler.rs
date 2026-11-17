@@ -420,7 +420,7 @@ impl<B: embedded_io::Write + Default + AsRef<[u8]>, Rewind: Fn(&mut B)>
         // That's quite verbose for `self.take_diagnostic_and_error().0`, but makes sure that the
         // compiler agress that we don't throw away information here.
         let (buffer, error) = self.take_diagnostic_and_error();
-        match error.map(core::convert::Into::into) {
+        match error.map(Into::into) {
             None => (),
         }
         buffer
