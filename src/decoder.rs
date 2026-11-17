@@ -214,6 +214,7 @@ impl Decoder {
 }
 
 #[cfg(test)]
+#[cfg(feature = "std")]
 mod tests {
     use crate::{OwnedLatestFrame, Slipmux, encode_buffered};
 
