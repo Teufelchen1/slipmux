@@ -11,18 +11,31 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  clippy:
     runs-on: ubuntu-latest
-
+    env:
+      RUSTFLAGS: --deny warnings
     steps:
       - uses: actions/checkout@v7
-      - name: Clippy Debug
+      - name: Clippy Version
         run: cargo clippy -V
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+      - run: cargo clippy --all-targets --all-features
+      - run: cargo clippy --all-targets
+      - run: cargo clippy --all-targets --no-default-features
+      - run: cargo doc --no-deps --all-features
+
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - name: Check formatting
         run: cargo fmt --all --check
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --all-targets
       - name: Run tests
         run: cargo test --verbose
